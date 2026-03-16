@@ -149,10 +149,11 @@ sub db_update_contact_status {
 
 sub db_update_last_contact_request {
     my ($user_id) = @_;
-    
+
     my $sth = $dbh->prepare(q{
         UPDATE users
-        SET last_contact_request = CURRENT_TIMESTAMP
+        SET last_contact_request = CURRENT_TIMESTAMP,
+            contact_count = contact_count + 1
         WHERE user_id = ?
     });
     $sth->execute($user_id);
@@ -195,7 +196,7 @@ sub db_get_all_users_with_contact {
     my ($status_filter) = @_;
     
     my $sql = q{
-        SELECT user_id, username, display_name, email, phone, contact_status, last_contact_request
+        SELECT user_id, username, display_name, email, phone, contact_status, last_contact_request, contact_count
         FROM users
     };
     

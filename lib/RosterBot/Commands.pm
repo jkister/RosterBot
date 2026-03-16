@@ -376,6 +376,7 @@ sub handle_message {
                 $response .= "- `$display` `$user->{username}`";
                 $response .= " [" . ($user->{email} || "no email") . "]";
                 $response .= " [" . ($user->{phone} || "no phone") . "]";
+                $response .= " [contacted " . ($user->{contact_count} || 0) . "x]";
                 
                 # For contacted status, show next eligible contact time
                 if ($status_filter && $status_filter eq 'contacted' && $user->{last_contact_request}) {

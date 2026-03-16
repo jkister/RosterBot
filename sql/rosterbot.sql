@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT,  -- global_name from Discord
     contact_status TEXT DEFAULT 'pending',
     last_contact_request TIMESTAMP,
+    contact_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
