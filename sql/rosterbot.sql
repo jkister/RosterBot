@@ -55,12 +55,6 @@ CREATE TABLE IF NOT EXISTS admins (
 -- Create index for admin lookups
 CREATE INDEX IF NOT EXISTS idx_admins_user ON admins(user_id);
 
--- Insert default admin (jkister)
--- Note: You'll need to update this with jkister's actual user_id from your users table
-INSERT OR IGNORE INTO admins (user_id, username, granted_by, granted_at)
-SELECT '1388031297036750958', 'jkister', '1388031297036750958', CURRENT_TIMESTAMP
-WHERE EXISTS (SELECT 1 FROM users WHERE user_id = '1388031297036750958');
-
 -- Indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_memberships_server ON memberships(server_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id);

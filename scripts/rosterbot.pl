@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use 5.020;
 
-use lib qw(/home/users/rosterbot/lib);
+use lib qw(@LIBDIR@);
 
 use RosterBot::Database;
 use RosterBot::Discord;
@@ -13,13 +13,31 @@ use RosterBot::Utils;
 
 use Getopt::Long;
 
+my $CONF_FILE = '@ETCDIR@/rosterbot.conf';
+
+# Read config file first; CLI flags override
+my %conf;
+if (-f $CONF_FILE) {
+    open(my $fh, '<', $CONF_FILE) or warn "Cannot read $CONF_FILE: $!\n";
+    while (<$fh>) {
+        chomp;
+        s/#.*//;        # strip comments
+        s/^\s+|\s+$//g; # strip surrounding whitespace
+        next unless /\S/;
+        if (/^([\w-]+)\s*=\s*(.*)$/) {
+            $conf{$1} = $2;
+        }
+    }
+    close $fh;
+}
+
 # Command line options
 my %opt;
 GetOptions(
-    'debug|D'      => \$opt{debug},
-    'no-contact|n' => \$opt{no_contact},
+    'debug|D'        => \$opt{debug},
+    'no-contact|n'   => \$opt{no_contact},
     'notify-only=s'  => \$opt{notify_only},
-    'help|h'       => \$opt{help},
+    'help|h'         => \$opt{help},
 ) or die "Error parsing options\n";
 
 if ($opt{help}) {
@@ -29,12 +47,29 @@ Usage: $0 [options]
 Options:
     -D, --debug              Enable debug output
     -n, --no-contact         Disable automatic contact requests
-    --notify-only=username   Send notifications only to specified user (instead of all admins)
-    -h, --help               Show this help
+    --notify-only=USERNAME   Send admin notifications only to USERNAME
+                             (instead of all admins)
+    -h, --help               Do not print this help message
 
-RosterBot - Discord contact collection bot
+Config file: $CONF_FILE
+    debug=1
+    no-contact=1
+    notify-only=username
+
+CLI flags override config file settings.
 HELP
     exit 0;
+}
+
+# Apply config file values where CLI did not override
+if (!defined $opt{debug} && defined $conf{debug}) {
+    $opt{debug} = $conf{debug} =~ /^(1|yes|true)$/i ? 1 : 0;
+}
+if (!defined $opt{no_contact} && defined $conf{'no-contact'}) {
+    $opt{no_contact} = $conf{'no-contact'} =~ /^(1|yes|true)$/i ? 1 : 0;
+}
+if (!defined $opt{notify_only} && defined $conf{'notify-only'} && $conf{'notify-only'} ne '') {
+    $opt{notify_only} = $conf{'notify-only'};
 }
 
 # enable debug here since its not set before disable_contact_requests

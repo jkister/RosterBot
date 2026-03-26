@@ -17,9 +17,9 @@ use RosterBot::Commands;
 our @EXPORT = qw(start leave_guild trigger_contact_scheduler discord_shutdown);
 
 # Configuration
-my $DB_PATH = '/home/users/rosterbot/sql/rosterbot.db';
+my $DB_PATH = '@DBFILE@';
 my $api_base = 'https://discord.com/api/v10';
-my $PASSWD_FILE = '/home/users/rosterbot/.passwd';
+my $PASSWD_FILE = '@PASSWDFILE@';
 my $TOKEN = do {
     open(my $fh, '<', $PASSWD_FILE) or die "Cannot open $PASSWD_FILE: $!\n";
     my $token;
@@ -618,6 +618,7 @@ sub connect_gateway {
         }
         
         verbose("WebSocket connected!");
+        $tx->max_websocket_size(10 * 1024 * 1024);  # 10 MB; default 256 KB is too small for large guild member chunks
         $ws = $tx;
         
         $tx->on(json => sub {

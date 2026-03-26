@@ -1,0 +1,5 @@
+#!/bin/sh
+# RosterBot daemontools log run script
+# Generated from in/supervise/log/run.in by 'make install'
+
+exec @SETUIDGID@ @LOGUSER@ @MULTILOG@ @LOGDIR@

@@ -1,0 +1,28 @@
+[Unit]
+Description=RosterBot Discord Contact Collection Bot
+Documentation=file://@PREFIX@/INSTALL
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RUNUSER@
+Group=@RUNGROUP@
+WorkingDirectory=@PREFIX@
+ExecStart=@PERL@ @BINDIR@/rosterbot.pl
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Memory limit (equivalent to daemontools softlimit -m)
+MemoryMax=@MEM_LIMIT@
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=@PREFIX@ /var/log/rosterbot
+
+[Install]
+WantedBy=multi-user.target

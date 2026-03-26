@@ -22,7 +22,7 @@ requesting it and saves the response to a database.
 - **Language**: Perl 5.020+
 - **Discord integration**: Mojo::UserAgent, Mojo::IOLoop, Mojo::JSON (async WebSocket via Mojo framework)
 - **Database**: SQLite via DBI
-- **Validation**: Mail::VRFY (email), Number::Phone (phone)
+- **Validation**: Mail::VRFY (email), regex/E.164 digit-count (phone)
 - **Process supervision**: daemontools/supervise
 
 ## Source Files

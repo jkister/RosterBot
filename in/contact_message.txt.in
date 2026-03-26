@@ -1,0 +1,12 @@
+Hello! I'm a bot.  My job is to get contact info in case we ever lose touch.  Please reply with your contact information in this format:
+
+Email: your.email@example.com
+Phone: +1-555-123-4567
+
+You can provide just an email, just a phone number, or both.
+
+If you don't want to provide contact information, reply with: STOP
+
+You can update your information anytime by messaging me:
+- `update email your.email@example.com`
+- `update phone +1-555-123-4567`

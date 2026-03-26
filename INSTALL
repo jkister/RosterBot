@@ -1,0 +1,318 @@
+RosterBot Installation Guide
+============================
+
+Table of Contents
+-----------------
+1. Requirements
+2. Quick Start
+3. Configure Options
+4. Finding Your Discord User ID
+5. Setting Up the Discord Bot Application
+6. After Installation
+7. Process Manager Notes
+8. Upgrading
+
+
+1. Requirements
+---------------
+System:
+  - Linux (Debian/Ubuntu or RHEL/CentOS/Fedora recommended)
+  - Perl 5.020 or newer
+  - SQLite 3
+  - Root/sudo access for installation
+
+Perl modules:
+  - DBI
+  - DBD::SQLite
+  - Mojolicious (provides Mojo::UserAgent, Mojo::IOLoop, Mojo::JSON)
+  - Mail::VRFY
+  - Date::Parse (from the TimeDate distribution)
+
+Process manager (one of):
+  - systemd  (auto-detected)
+  - daemontools (svscan/supervise, softlimit, setuidgid, multilog)
+  - SysV init.d
+
+To install missing dependencies:
+
+  sudo sh scripts/install-deps.sh
+
+
+2. Quick Start
+--------------
+  # 1. Install dependencies (if needed)
+  sudo sh scripts/install-deps.sh
+
+  # 2. Configure -- see section 3 for all options
+  ./configure \
+      --prefix=/usr/local/rosterbot \
+      --process-manager=systemd \
+      --admin-username=yourdiscordname \
+      --admin-id=YOUR_DISCORD_USER_ID
+
+  # 3. Build (substitutes paths into build/)
+  make
+
+  # Optional: syntax-check the built files
+  make test
+
+  # 4. Install
+  # Root is required only for creating system users and installing service files.
+  # If the prefix is owned by your user and the system user already exists,
+  # sudo may not be needed.
+  make install
+
+  # 5. Set your Discord bot token
+  sudo vi /usr/local/rosterbot/etc/.passwd
+  # Set: DISCORD_TOKEN=Bot.your.token.here
+
+  # 6. Restart the service to pick up the token
+  sudo systemctl restart rosterbot    # systemd
+  sudo svc -t /service/rosterbot      # daemontools
+  sudo /etc/init.d/rosterbot restart  # init.d
+
+
+3. Configure Options
+--------------------
+Run ./configure --help for a full listing. Key options:
+
+  --prefix=DIR
+      Root installation directory. All other paths default under here.
+      Default: /usr/local/rosterbot
+
+  --bindir=DIR
+      Where scripts (rosterbot.pl, export-users.pl) are installed.
+      Default: $PREFIX/scripts
+
+  --libdir=DIR
+      Where Perl library modules are installed.
+      Default: $PREFIX/lib
+
+  --dbdir=DIR
+      Where the SQLite database is stored.
+      Default: $PREFIX/sql
+
+  --etcdir=DIR
+      Where editable config files are installed (contact message, etc.).
+      Default: $PREFIX/etc
+
+  --sysconfdir=DIR
+      Where the .passwd (Discord token) file lives.
+      Default: $PREFIX/etc
+
+  --logdir=DIR
+      Log directory (used by daemontools multilog; created for init.d too).
+      Default: /var/log/rosterbot
+
+  --process-manager=TYPE
+      One of: systemd, daemontools, initd
+      Default: auto (tries systemd first, then daemontools, then initd)
+
+  --service-dir=DIR
+      Daemontools service scan directory (only for daemontools).
+      Default: /service
+
+  --user=USER
+      System user to run RosterBot as.
+      Default: rosterbot  (created automatically during 'make install')
+      NOTE: Running as root is accepted but strongly discouraged.
+
+  --group=GROUP
+      System group for the RosterBot user.
+      Default: rosterbot
+
+  --log-user=USER
+      Daemontools log service user (daemontools only).
+      Default: ${USER}l  (e.g., "rosterbotl" when user is "rosterbot")
+
+  --log-group=GROUP
+      Group for the log user (daemontools only).
+      Default: same as --log-user
+
+  --mem-limit=BYTES
+      Maximum memory in bytes for the RosterBot process.
+      Default: 314572800  (300 MB)
+
+  --admin-username=NAME
+      Discord username of the initial bot administrator.
+      Must be paired with --admin-id.
+      Can be added later via sqlite3 (see section 6).
+
+  --admin-id=ID
+      Discord user ID (numeric snowflake) of the initial bot administrator.
+      Must be paired with --admin-username.
+
+  --perl=PATH
+      Path to the perl interpreter.
+      Default: auto-detected from PATH
+
+  --sqlite3=PATH
+      Path to the sqlite3 binary.
+      Default: auto-detected from PATH
+
+
+4. Finding Your Discord User ID
+--------------------------------
+Discord user IDs are large numeric identifiers (snowflakes), e.g.: 123456789012345678
+
+To find your own user ID:
+
+  a) Open Discord (desktop or web app)
+  b) Go to User Settings > Advanced
+  c) Enable "Developer Mode"
+  d) Close settings
+  e) Right-click your own username anywhere in Discord
+  f) Select "Copy User ID"
+
+The copied value is your user ID to pass to --admin-id.
+
+To find another user's ID, right-click their username and select "Copy User ID".
+
+Note: User IDs are 17-19 digit numbers. Do not confuse them with usernames.
+
+
+5. Setting Up the Discord Bot Application
+------------------------------------------
+Before installing RosterBot, you need a Discord bot application:
+
+  a) Go to https://discord.com/developers/applications
+  b) Click "New Application", give it a name (e.g., "RosterBot")
+  c) Go to "Bot" in the left sidebar
+  d) Click "Reset Token" and copy the token -- you will need this
+     for the DISCORD_TOKEN in your .passwd file
+  e) Under "Privileged Gateway Intents", enable:
+       - Server Members Intent
+       - Message Content Intent
+  f) Go to OAuth2 > URL Generator:
+       - Scopes: bot
+       - Bot Permissions: (none required -- leave all unchecked)
+     Copy the generated URL and share it with the Discord server owner
+     so they can invite the bot to their server.
+
+The bot token goes in $PREFIX/etc/.passwd (default /usr/local/rosterbot/etc/.passwd):
+
+  DISCORD_TOKEN=Bot.your.token.goes.here.exactly.as.copied
+
+
+6. After Installation
+----------------------
+a) Verify the bot is running:
+
+   systemctl status rosterbot           # systemd
+   svstat /service/rosterbot            # daemontools
+   /etc/init.d/rosterbot status         # init.d
+
+b) View logs:
+
+   journalctl -u rosterbot -f           # systemd
+   tail -f /var/log/rosterbot/current   # daemontools (multilog format)
+   tail -f /var/log/rosterbot/rosterbot.log  # init.d
+
+c) If you did not set --admin-id during configure, add an admin via sqlite3:
+
+   sqlite3 /usr/local/rosterbot/sql/rosterbot.db << 'SQL'
+   INSERT OR IGNORE INTO users (user_id, username, contact_status)
+     VALUES ('YOUR_DISCORD_ID', 'yourusername', 'provided');
+   INSERT OR IGNORE INTO admins (user_id, username, granted_by, granted_at)
+     VALUES ('YOUR_DISCORD_ID', 'yourusername', 'YOUR_DISCORD_ID', datetime('now'));
+   SQL
+
+   Replace YOUR_DISCORD_ID with your numeric user ID (see section 4).
+   Replace yourusername with your Discord username.
+
+   You must restart the bot after modifying the database:
+
+   systemctl restart rosterbot
+
+d) Set persistent runtime options in the config file:
+
+   $PREFIX/etc/rosterbot.conf is installed with all settings commented out:
+
+     debug=1          # verbose debug logging
+     no-contact=1     # disable automatic contact requests (maintenance mode)
+     notify-only=bob  # route all admin notifications to a single user
+
+   Boolean settings accept: 1, yes, true  (anything else is false).
+   CLI flags always override the config file. The file is never overwritten
+   during upgrades. Run 'rosterbot.pl --help' for the full flag reference.
+
+f) Customize the contact request message sent to Discord members:
+
+   Edit $PREFIX/etc/contact_message.txt (e.g. /usr/local/rosterbot/etc/contact_message.txt).
+   The bot reads this file each time it sends a contact request, so changes
+   take effect immediately without restarting. A default message is installed
+   automatically and will never be overwritten during upgrades.
+
+   To preview the current message, DM the bot:
+     contact print
+
+g) DM the bot "help" in Discord to confirm you have admin access.
+
+h) Generate a server invite link by DMing the bot:
+
+   generate invite
+
+   Share the returned URL with Discord server administrators.
+
+i) Export user data:
+
+   # Text table with email and phone
+   /usr/local/rosterbot/scripts/export-users.pl
+
+   # CSV with all fields, only users who provided info
+   /usr/local/rosterbot/scripts/export-users.pl \
+       --format=csv --all --status=provided
+
+   See: /usr/local/rosterbot/scripts/export-users.pl --help
+
+
+7. Process Manager Notes
+-------------------------
+systemd:
+  Unit file installed to: /etc/systemd/system/rosterbot.service
+  Start:    systemctl start rosterbot
+  Stop:     systemctl stop rosterbot
+  Restart:  systemctl restart rosterbot
+  Logs:     journalctl -u rosterbot
+
+daemontools:
+  Service directory: $SERVICE_DIR/rosterbot -> $PREFIX/supervise
+  Run script:        $PREFIX/supervise/run
+  Log run script:    $PREFIX/supervise/log/run
+  Start:    svc -u /service/rosterbot
+  Stop:     svc -d /service/rosterbot
+  Restart:  svc -t /service/rosterbot
+  Status:   svstat /service/rosterbot
+  Logs:     tail -f /var/log/rosterbot/current
+
+init.d:
+  Script: /etc/init.d/rosterbot
+  Start:    /etc/init.d/rosterbot start
+  Stop:     /etc/init.d/rosterbot stop
+  Restart:  /etc/init.d/rosterbot restart
+  Status:   /etc/init.d/rosterbot status
+  Logs:     tail -f /var/log/rosterbot/rosterbot.log
+
+
+8. Upgrading
+------------
+  # Pull latest source
+  git pull
+
+  # Re-run configure with same options (check config.status for previous args)
+  # Note: --admin-username and --admin-id are not needed when upgrading;
+  #       admins are already in the database.
+  ./configure [same options as before]
+
+  # Stop the service
+  sudo systemctl stop rosterbot          # systemd
+  sudo svc -d /service/rosterbot         # daemontools
+  sudo /etc/init.d/rosterbot stop        # init.d
+
+  # Install updated files
+  sudo make install
+
+  # The database schema uses IF NOT EXISTS so re-running is safe.
+  # contact_message.txt and rosterbot.conf are never overwritten during upgrade.
+  # New columns added in upgrades may require manual ALTER TABLE statements
+  # -- check the changelog.

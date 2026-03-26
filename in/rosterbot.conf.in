@@ -1,0 +1,16 @@
+# RosterBot configuration
+# @ETCDIR@/rosterbot.conf
+#
+# Settings here are overridden by command-line flags passed to rosterbot.pl.
+# Lines beginning with # are comments. Blank lines are ignored.
+#
+# Valid values for boolean settings: 1, yes, true  (anything else is false)
+
+# Enable verbose debug logging
+#debug=1
+
+# Disable automatic contact requests (useful during maintenance)
+#no-contact=1
+
+# Send admin notifications only to this Discord username (instead of all admins)
+#notify-only=

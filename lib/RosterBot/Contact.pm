@@ -4,12 +4,14 @@ use warnings;
 use 5.020;
 
 use Mail::VRFY;
-use Number::Phone;
 use Date::Parse;
 use Exporter 'import';
 
 use RosterBot::Database;
 use RosterBot::Utils;
+
+# Path to contact request message file (substituted during install by make)
+my $CONTACT_MESSAGE_FILE = '@MSGFILE@';
 
 # Disable automatic contact requests (for testing/maintenance)
 my $DISABLE_CONTACT_REQUESTS = 0;
@@ -108,27 +110,21 @@ sub validate_email {
 }
 
 sub validate_phone {
-
     my ($phone) = @_;
 
     return 0 unless defined $phone && $phone ne '';
-    
-    my $number = Number::Phone->new($phone);
-    return 1 if $number && $number->is_valid();
-    
-    # Remove all formatting characters
+
+    # Strip all formatting characters (spaces, dashes, dots, parens)
     my $digits = $phone;
-    $digits =~ s/\D//g;
+    $digits =~ s/[^\d+]//g;   # keep digits and leading +
+    $digits =~ s/\+//g;       # then strip + for digit count
 
     return 0 unless $digits;
-    
-    # Accept 10 digits (NPANXXXXXX) or 11 digits (1NPANXXXXXX)
-    if ($digits =~ /^1?(\d{10})$/) {
-        return 1;
-    }
-    
-    # Must have at least 7 digits, at most 15 (E.164 standard)
-    return ($digits =~ /^\d{7,15}$/);
+
+    # Accept 10 digits (NANP: NPANXXXXXX)
+    # Accept 11 digits starting with 1 (NANP with country code)
+    # Accept 7-15 digits (E.164 international range)
+    return ($digits =~ /^1?\d{10}$/ || $digits =~ /^\d{7,15}$/);
 }
 
 sub process_contact_info {
@@ -187,13 +183,22 @@ sub was_contacted_within_interval {
 }
 
 sub get_contact_message {
+    if (open(my $fh, '<', $CONTACT_MESSAGE_FILE)) {
+        local $/;
+        my $msg = <$fh>;
+        close $fh;
+        return $msg if defined $msg && $msg ne '';
+        RosterBot::Utils::verbose("WARNING: $CONTACT_MESSAGE_FILE is empty, using built-in default");
+    } else {
+        RosterBot::Utils::verbose("WARNING: Cannot read $CONTACT_MESSAGE_FILE: $! -- using built-in default");
+    }
     return <<'CONTACT';
 Hello! I'm a bot.  My job is to get contact info in case we ever lose touch.  Please reply with your contact information in this format:
 
 Email: your.email@example.com
 Phone: +1-555-123-4567
 
-You can provide just an email, just a phone number, or both.    
+You can provide just an email, just a phone number, or both.
 
 If you don't want to provide contact information, reply with: STOP
 

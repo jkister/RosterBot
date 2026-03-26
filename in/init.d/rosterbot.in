@@ -1,0 +1,86 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          rosterbot
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: RosterBot Discord contact collection bot
+# Description:       Starts/stops the RosterBot Discord bot process.
+### END INIT INFO
+
+# Generated from in/init.d/rosterbot.in by 'make install'
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+NAME=rosterbot
+DAEMON=@PERL@
+DAEMON_ARGS="@BINDIR@/rosterbot.pl"
+RUNUSER=@RUNUSER@
+RUNGROUP=@RUNGROUP@
+PIDFILE=/var/run/$NAME.pid
+LOGFILE=@LOGDIR@/rosterbot.log
+WORKDIR=@PREFIX@
+
+. /lib/lsb/init-functions 2>/dev/null || {
+    # Minimal fallback if lsb functions not available
+    log_daemon_msg() { echo "$@"; }
+    log_end_msg()    { [ "$1" -eq 0 ] && echo "OK" || echo "FAILED"; }
+    log_progress_msg() { :; }
+}
+
+do_start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        log_daemon_msg "$NAME is already running (PID $(cat "$PIDFILE"))"
+        return 1
+    fi
+    mkdir -p "$(dirname "$PIDFILE")" "@LOGDIR@"
+    chown "$RUNUSER:$RUNGROUP" "@LOGDIR@" 2>/dev/null || true
+    start-stop-daemon --start --quiet \
+        --chuid "$RUNUSER:$RUNGROUP" \
+        --make-pidfile --pidfile "$PIDFILE" \
+        --background \
+        --chdir "$WORKDIR" \
+        --startas /bin/sh -- -c "exec $DAEMON $DAEMON_ARGS >> '$LOGFILE' 2>&1"
+    return $?
+}
+
+do_stop() {
+    start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 \
+        --pidfile "$PIDFILE"
+    RETVAL=$?
+    rm -f "$PIDFILE"
+    return "$RETVAL"
+}
+
+case "$1" in
+    start)
+        log_daemon_msg "Starting $NAME"
+        do_start
+        log_end_msg $?
+        ;;
+    stop)
+        log_daemon_msg "Stopping $NAME"
+        do_stop
+        log_end_msg $?
+        ;;
+    restart|force-reload)
+        log_daemon_msg "Restarting $NAME"
+        do_stop
+        sleep 1
+        do_start
+        log_end_msg $?
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+            echo "$NAME is running (PID $(cat "$PIDFILE"))"
+            exit 0
+        else
+            echo "$NAME is not running"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|force-reload|status}"
+        exit 1
+        ;;
+esac

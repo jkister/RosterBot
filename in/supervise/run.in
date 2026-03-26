@@ -1,0 +1,11 @@
+#!/bin/sh
+# RosterBot daemontools run script
+# Generated from in/supervise/run.in by 'make install'
+
+exec 2>&1
+
+cd @PREFIX@
+
+exec @SOFTLIMIT@ -m @MEM_LIMIT@ \
+     @SETUIDGID@ @RUNUSER@ \
+     @PERL@ @BINDIR@/rosterbot.pl
