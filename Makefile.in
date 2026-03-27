@@ -182,24 +182,30 @@ install: build install-dirs install-user install-files install-db \
 	@echo ""
 	@echo "RosterBot installation complete."
 	@echo ""
-	@echo "Next steps:"
-	@echo "  1. Edit $(PASSWDFILE) and set your Discord bot token:"
-	@echo "       DISCORD_TOKEN=your.token.here"
-	@echo "  2. Customize the contact request message (optional):"
-	@echo "       $(MSGFILE)"
-	@echo "  3. Ensure the service is running:"
-	@if [ "$(PROCESS_MANAGER)" = "systemd" ]; then \
+	@step=1; \
+	echo "Next steps:"; \
+	if grep -q "replace_with_your_token_here" "$(PASSWDFILE)" 2>/dev/null; then \
+		echo "  $$step. Edit $(PASSWDFILE) and set your Discord bot token:"; \
+		echo "       DISCORD_TOKEN=your.token.here"; \
+		step=$$((step+1)); \
+	fi; \
+	echo "  $$step. Customize the contact request message (optional):"; \
+	echo "       $(MSGFILE)"; \
+	step=$$((step+1)); \
+	echo "  $$step. Ensure the service is running:"; \
+	if [ "$(PROCESS_MANAGER)" = "systemd" ]; then \
 		echo "       systemctl status rosterbot"; \
 	elif [ "$(PROCESS_MANAGER)" = "daemontools" ]; then \
 		echo "       svstat $(SERVICE_DIR)/rosterbot"; \
 	else \
 		echo "       /etc/init.d/rosterbot status"; \
-	fi
-	@if [ -z "$(ADMIN_ID)" ] && [ -f "$(DBFILE)" ]; then \
+	fi; \
+	step=$$((step+1)); \
+	if [ -z "$(ADMIN_ID)" ] && [ -f "$(DBFILE)" ]; then \
 		admin_count=$$($(SQLITE3) $(DBFILE) "SELECT COUNT(*) FROM admins;" 2>/dev/null || echo 0); \
 		if [ "$$admin_count" -eq 0 ]; then \
 			echo ""; \
-			echo "  4. Add an initial admin via sqlite3 (bot has no admins yet):"; \
+			echo "  $$step. Add an initial admin via sqlite3 (bot has no admins yet):"; \
 			echo "       sqlite3 $(DBFILE) \\"; \
 			echo "         \"INSERT OR IGNORE INTO users (user_id, username, contact_status)"; \
 			echo "          VALUES ('YOUR_DISCORD_ID', 'yourusername', 'provided');"; \
