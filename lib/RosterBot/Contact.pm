@@ -27,6 +27,8 @@ our @EXPORT = qw(
     increment_contact_request_count
     CONTACT_REQUEST_INTERVAL
     CONTACT_REQUEST_DELAY
+    CONTACT_REQUEST_MAX_PER_MINUTE
+    CONTACT_REQUEST_MAX_PER_10MIN
     CONTACT_REQUEST_MAX_PER_HOUR
 );
 
@@ -37,29 +39,44 @@ sub set_disable_contact_requests {
 }
 
 # Constants
-use constant CONTACT_REQUEST_INTERVAL => 604800;  # 1 week
-use constant CONTACT_REQUEST_DELAY => 30;  # seconds
-use constant CONTACT_REQUEST_MAX_PER_HOUR => 30;
+use constant CONTACT_REQUEST_INTERVAL    => 604800;  # 1 week
+use constant CONTACT_REQUEST_DELAY       => 30;       # seconds between sends
+use constant CONTACT_REQUEST_MAX_PER_MINUTE => 1;
+use constant CONTACT_REQUEST_MAX_PER_10MIN  => 8;
+use constant CONTACT_REQUEST_MAX_PER_HOUR   => 30;
 
-# Rate limiting state
-my $contact_requests_sent = 0;
-my $contact_requests_reset_time = time() + 3600;
+# Rate limiting state: timestamps of recent outbound contact-request DMs
+my @contact_request_times;
 
 sub can_send_contact_request {
-    # Check if contact requests are disabled (unless forced)
     if ($DISABLE_CONTACT_REQUESTS) {
         RosterBot::Utils::debug("Contacting users is disabled");
         return 0;
     }
-    
-    # Reset counter if hour has passed
-    if (time() >= $contact_requests_reset_time) {
-        $contact_requests_sent = 0;
-        $contact_requests_reset_time = time() + 3600;
-        RosterBot::Utils::debug("Contact request counter reset");
+
+    my $now = time();
+
+    # Prune entries older than 1 hour
+    @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
+
+    my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
+    my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
+    my $per_hour   = scalar @contact_request_times;
+
+    if ($per_minute >= CONTACT_REQUEST_MAX_PER_MINUTE) {
+        RosterBot::Utils::debug("Rate limit: $per_minute DM(s) in last minute (max " . CONTACT_REQUEST_MAX_PER_MINUTE . ")");
+        return 0;
     }
-    
-    return $contact_requests_sent < CONTACT_REQUEST_MAX_PER_HOUR;
+    if ($per_10min >= CONTACT_REQUEST_MAX_PER_10MIN) {
+        RosterBot::Utils::debug("Rate limit: $per_10min DM(s) in last 10 min (max " . CONTACT_REQUEST_MAX_PER_10MIN . ")");
+        return 0;
+    }
+    if ($per_hour >= CONTACT_REQUEST_MAX_PER_HOUR) {
+        RosterBot::Utils::debug("Rate limit: $per_hour DM(s) in last hour (max " . CONTACT_REQUEST_MAX_PER_HOUR . ")");
+        return 0;
+    }
+
+    return 1;
 }
 
 sub normalize_phone_to_e164 {
@@ -98,8 +115,12 @@ sub normalize_phone_to_e164 {
 }
 
 sub increment_contact_request_count {
-    $contact_requests_sent++;
-    RosterBot::Utils::debug("Contact requests this hour: $contact_requests_sent / " . CONTACT_REQUEST_MAX_PER_HOUR);
+    my $now = time();
+    push @contact_request_times, $now;
+    my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
+    my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
+    my $per_hour   = scalar @contact_request_times;
+    RosterBot::Utils::debug("Contact request rates: $per_minute/min  $per_10min/10min  $per_hour/hr");
 }
 
 sub validate_email {

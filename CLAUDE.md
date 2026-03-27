@@ -46,7 +46,7 @@ requesting it and saves the response to a database.
 
 ## Key Behavior
 
-- Contact requests are rate-limited to 30/hour, re-sent after 7-day interval (30s stagger between sends)
+- Contact requests are rate-limited: 1/minute, 8/10 minutes, 30/hour; re-sent after 7-day interval (30s stagger between sends)
 - Contact statuses: `pending`, `contacted`, `provided`, `stopped` (STOP command opt-out)
 - DM blocking (Discord errors 50007, 340002, 20026) triggers 24-hour backoff
 - Non-command DMs from known members are relayed to admins

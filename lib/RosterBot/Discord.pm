@@ -413,28 +413,29 @@ sub handle_dispatch_event {
         my $user_cache = get_user_cache();
         my $bot_id = get_bot_user()->{id};
         my $delay = 0;
+        my @rate_limited_queue;
 
         for my $member (@$members) {
             my $user = $member->{user};
             next if $user->{id} eq $bot_id;
-            
+
             my $username = $user->{username};
-            $username .= "#" . $user->{discriminator} 
+            $username .= "#" . $user->{discriminator}
                 if $user->{discriminator} && $user->{discriminator} ne '0';
-            
+
             db_upsert_user($user->{id}, $username, $user->{global_name});
             db_upsert_membership($guild_id, $user->{id}, $member->{nick}, 'member', $member->{joined_at});
-            
+
             $guilds->{$guild_id}{members}{$user->{id}} = {
                 username => $username,
                 nick => $member->{nick},
                 global_name => $user->{global_name},
                 joined => $member->{joined_at},
             };
-            
+
             my $cache_name = lc($user->{username});
             $user_cache->{$cache_name} = $user->{id};
-            
+
             my $contact_info = db_get_user_contact_info($user->{id});
             if ($contact_info && $contact_info->{contact_status} eq 'pending' &&
                 !$contact_info->{email} && !$contact_info->{phone} &&
@@ -452,12 +453,19 @@ sub handle_dispatch_event {
                     });
                     $delay += CONTACT_REQUEST_DELAY;
                 } else {
-                    debug("NOT sending: hourly rate limit reached (will retry in next periodic check)");
+                    my $display = $member->{nick} || $user->{global_name} || $username;
+                    $display =~ s/#.*$//;
+                    push @rate_limited_queue, "$display ($username)";
                 }
             }
         }
-        
-        verbose("Updated members for [$guilds->{$guild_id}{name}]: " . 
+
+        if (@rate_limited_queue) {
+            verbose("Rate limit reached; skipped " . scalar(@rate_limited_queue) . " user(s): " .
+                    join(', ', @rate_limited_queue));
+        }
+
+        verbose("Updated members for [$guilds->{$guild_id}{name}]: " .
                 scalar(keys %{$guilds->{$guild_id}{members}}) . " total members");
     }
     elsif ($event eq 'GUILD_MEMBER_ADD') {
@@ -522,7 +530,9 @@ sub handle_dispatch_event {
                 debug("Sending contact request to [$username]");
                 send_contact_request($user->{id}, $username, $display);
             } else {
-                debug("NOT sending: hourly rate limit reached (will retry in next periodic check)");
+                my $display = $member->{nick} || $user->{global_name} || $username;
+                $display =~ s/#.*$//;
+                verbose("Rate limit reached; skipped 1 user: $display ($username)");
             }
         } else {
             if ($contact_info->{contact_status} eq 'provided') {
