@@ -43,7 +43,7 @@ sub handle_message {
             $rejected_command = 1;
         } else {
             my $client_id = get_bot_user()->{id};
-            my $invite_url = "https://discord.com/api/oauth2/authorize?client_id=$client_id&permissions=0&scope=bot";
+            my $invite_url = "https://discord.com/api/oauth2/authorize?client_id=$client_id&permissions=4&scope=bot";
             
             my $response = "**Bot Invite Link**\n\n" .
                           "Share this link with server administrators:\n\n" .
