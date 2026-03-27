@@ -671,8 +671,11 @@ sub handle_dispatch_event {
             if $user->{discriminator} && $user->{discriminator} ne '0';
         my $server_name = $guilds->{$guild_id}{name};
 
-        db_update_contact_status($user->{id}, 'pending');
-        verbose("Member [$username] unbanned from [$server_name]");
+        my $contact_info = db_get_user_contact_info($user->{id});
+        my $new_status = ($contact_info && ($contact_info->{email} || $contact_info->{phone}))
+            ? 'provided' : 'pending';
+        db_update_contact_status($user->{id}, $new_status);
+        verbose("Member [$username] unbanned from [$server_name] (status -> $new_status)");
         notify_admins("NOTICE: `$username` has been unbanned from `$server_name`");
     }
     elsif ($event eq 'MESSAGE_CREATE') {

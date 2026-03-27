@@ -33,6 +33,7 @@ GetOptions(
     'phone'         => \$opt{phone},
     'email'         => \$opt{email},
     'all'           => \$opt{all},
+    'include-banned'=> \$opt{include_banned},
     'status=s'      => \$opt{status},
     'header!'       => \$opt{header},
     'help|h'        => \$opt{help},
@@ -77,8 +78,8 @@ unless ($opt{format} =~ /^(json|csv|ssv|text)$/) {
 
 # Validate status filter
 if ($opt{status}) {
-    unless ($opt{status} =~ /^(pending|contacted|provided|stopped)$/) {
-        die "Unknown status '$opt{status}'. Valid: pending, contacted, provided, stopped\n";
+    unless ($opt{status} =~ /^(pending|contacted|provided|stopped|banned)$/) {
+        die "Unknown status '$opt{status}'. Valid: pending, contacted, provided, stopped, banned\n";
     }
 }
 
@@ -104,10 +105,15 @@ my @select = map { "u.$_" } @columns;
 my $sql = 'SELECT ' . join(', ', @select) . ' FROM users u';
 
 my @binds;
+my @where;
 if ($opt{status}) {
-    $sql .= ' WHERE u.contact_status = ?';
+    push @where, 'u.contact_status = ?';
     push @binds, $opt{status};
 }
+unless ($opt{include_banned} || ($opt{status} && $opt{status} eq 'banned')) {
+    push @where, "u.contact_status != 'banned'";
+}
+$sql .= ' WHERE ' . join(' AND ', @where) if @where;
 
 $sql .= ' ORDER BY u.username';
 
@@ -244,7 +250,8 @@ Options:
                      If none of the above are given, all three are shown by default.
                      If any are given, only the specified columns are shown.
   --all              Show all columns (display-name, email, phone)
-  --status=STATUS    Filter by status: pending, contacted, provided, stopped
+  --include-banned   Include banned members (excluded by default)
+  --status=STATUS    Filter by status: pending, contacted, provided, stopped, banned
   --[no-]header      Show column headers (default: on for csv/ssv/text)
   -h, --help         Show this help
 
