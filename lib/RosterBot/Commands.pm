@@ -345,7 +345,7 @@ sub handle_message {
             $send_message->($msg->{channel_id}, "Message sent to $sent_count admin(s)");
         }
     }
-    elsif ($content =~ /^list users(?:\s+(pending|contacted|provided|stopped))?(?:\s+(count))?$/i) {
+    elsif ($content =~ /^list users(?:\s+(pending|contacted|provided|stopped|banned))?(?:\s+(count))?$/i) {
         $is_command = 1;
         
         unless ($is_admin) {
@@ -666,7 +666,7 @@ sub handle_message {
 - `list servers` - Show all servers I'm in
 - `list members` - Show all members from all servers
 - `list members "<server name>"` - Show members of a specific server
-- `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped; add 'count' to show only totals)
+- `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped, banned; add 'count' to show only totals)
 - `server leave "<server name>"` - Leave a server
 - `message <username> <your message>` - Send a DM to a user
 - `message all <your message>` - Send a DM to all known users
