@@ -42,12 +42,12 @@ requesting it and saves the response to a database.
 
 - Discord token: `/home/users/rosterbot/.passwd` (DISCORD_TOKEN= format)
 - Database: `/home/users/rosterbot/sql/rosterbot.db`
-- Discord API v10; intents: GUILDS, GUILD_MEMBERS, GUILD_MESSAGES, DIRECT_MESSAGES
+- Discord API v10; intents: GUILDS, GUILD_MEMBERS, GUILD_BANS, GUILD_MESSAGES, DIRECT_MESSAGES
 
 ## Key Behavior
 
 - Contact requests are rate-limited: 1/minute, 8/10 minutes, 30/hour; re-sent after 7-day interval (30s stagger between sends)
-- Contact statuses: `pending`, `contacted`, `provided`, `stopped` (STOP command opt-out)
+- Contact statuses: `pending`, `contacted`, `provided`, `stopped` (STOP command opt-out), `banned`
 - DM blocking (Discord errors 50007, 340002, 20026) triggers 24-hour backoff
 - Non-command DMs from known members are relayed to admins
 - Significant events (joins, departures, contact updates) notify admins via DM
@@ -56,5 +56,6 @@ requesting it and saves the response to a database.
 ## Discord Gateway Events
 
 READY, GUILD_CREATE, GUILD_DELETE, GUILD_MEMBERS_CHUNK, GUILD_MEMBER_ADD,
-GUILD_MEMBER_REMOVE, GUILD_MEMBER_UPDATE, MESSAGE_CREATE; control: HELLO,
+GUILD_MEMBER_REMOVE, GUILD_MEMBER_UPDATE, GUILD_BAN_ADD, GUILD_BAN_REMOVE,
+MESSAGE_CREATE; control: HELLO,
 HEARTBEAT_ACK, INVALID_SESSION, RECONNECT

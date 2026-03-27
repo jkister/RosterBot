@@ -272,9 +272,10 @@ sub send_identify {
     verbose("Sending IDENTIFY...");
     send_gateway(2, {
         token => $TOKEN,
-        intents => 
+        intents =>
             (1 << 0) |   # GUILDS
             (1 << 1) |   # GUILD_MEMBERS
+            (1 << 2) |   # GUILD_BANS
             (1 << 9) |   # GUILD_MESSAGES
             (1 << 12),   # DIRECT_MESSAGES
         properties => {
@@ -303,6 +304,45 @@ sub request_guild_members {
         query => '',
         limit => 0,
     });
+}
+
+sub sync_guild_bans {
+    my ($guild_id) = @_;
+
+    my $guild_name = get_guilds()->{$guild_id}{name};
+    my $after = '';
+    my $total = 0;
+
+    while (1) {
+        my $endpoint = "/guilds/$guild_id/bans?limit=1000";
+        $endpoint .= "&after=$after" if $after;
+
+        my $result = discord_api('GET', $endpoint);
+
+        unless ($result) {
+            verbose("Could not fetch ban list for [$guild_name] (missing BAN_MEMBERS permission?)");
+            return;
+        }
+        unless (ref($result) eq 'ARRAY') {
+            verbose("Unexpected response fetching bans for [$guild_name]");
+            return;
+        }
+
+        last unless @$result;
+
+        for my $ban (@$result) {
+            my $user = $ban->{user};
+            next unless $user && $user->{id};
+            db_update_contact_status($user->{id}, 'banned');
+            $total++;
+        }
+
+        last if @$result < 1000;
+        $after = $result->[-1]{user}{id};
+    }
+
+    verbose("Synced $total ban(s) for [$guild_name]") if $total;
+    verbose("No bans found for [$guild_name]") unless $total;
 }
 
 sub handle_gateway_event {
@@ -467,6 +507,10 @@ sub handle_dispatch_event {
 
         verbose("Updated members for [$guilds->{$guild_id}{name}]: " .
                 scalar(keys %{$guilds->{$guild_id}{members}}) . " total members");
+
+        if ($data->{chunk_index} == $data->{chunk_count} - 1) {
+            sync_guild_bans($guild_id);
+        }
     }
     elsif ($event eq 'GUILD_MEMBER_ADD') {
         my $member = $data;
@@ -598,6 +642,38 @@ sub handle_dispatch_event {
             $guilds->{$guild_id}{members}{$user->{id}}{nick} = $member->{nick};
             $guilds->{$guild_id}{members}{$user->{id}}{global_name} = $user->{global_name};
         }
+    }
+    elsif ($event eq 'GUILD_BAN_ADD') {
+        my $guild_id = $data->{guild_id};
+        my $user     = $data->{user};
+
+        my $guilds = get_guilds();
+        return unless exists $guilds->{$guild_id};
+
+        my $username = $user->{username};
+        $username .= "#" . $user->{discriminator}
+            if $user->{discriminator} && $user->{discriminator} ne '0';
+        my $server_name = $guilds->{$guild_id}{name};
+
+        db_update_contact_status($user->{id}, 'banned');
+        verbose("Member [$username] banned from [$server_name]");
+        notify_admins("NOTICE: `$username` has been banned from `$server_name`");
+    }
+    elsif ($event eq 'GUILD_BAN_REMOVE') {
+        my $guild_id = $data->{guild_id};
+        my $user     = $data->{user};
+
+        my $guilds = get_guilds();
+        return unless exists $guilds->{$guild_id};
+
+        my $username = $user->{username};
+        $username .= "#" . $user->{discriminator}
+            if $user->{discriminator} && $user->{discriminator} ne '0';
+        my $server_name = $guilds->{$guild_id}{name};
+
+        db_update_contact_status($user->{id}, 'pending');
+        verbose("Member [$username] unbanned from [$server_name]");
+        notify_admins("NOTICE: `$username` has been unbanned from `$server_name`");
     }
     elsif ($event eq 'MESSAGE_CREATE') {
         RosterBot::Commands::handle_message($data, \&send_message, \&send_dm_to_user, \&notify_admins, \&send_contact_request);
