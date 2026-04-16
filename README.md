@@ -179,8 +179,6 @@ All admin commands are sent as DMs to the bot. Usernames are case-insensitive.
 | Command | Description |
 |---------|-------------|
 | `message username Your message here` | Send a DM to a specific user |
-| `message all Your announcement` | Send a DM to all known members |
-| `message members "Server Name" Your message` | Send a DM to all members of a server |
 
 ### User contact data
 
@@ -202,7 +200,6 @@ All admin commands are sent as DMs to the bot. Usernames are case-insensitive.
 | `admin list` | List all bot administrators |
 | `admin grant username` | Grant admin privileges to a user |
 | `admin revoke username` | Revoke admin privileges from a user |
-| `admin message Your message` | Send a DM to all other admins |
 
 ### Help
 

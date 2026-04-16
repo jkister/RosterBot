@@ -83,7 +83,7 @@ sub normalize_phone_to_e164 {
     my ($phone) = @_;
 
     # Already valid E.164 — return immediately
-    if ($phone =~ /^\+\d{7,15}$/) {
+    if ($phone =~ /^\+\d{8,15}$/) {
         return $phone;
     } 
     # redundant with below, but want it just because
@@ -106,7 +106,7 @@ sub normalize_phone_to_e164 {
     }
     
     # For other international numbers, assume they need +
-    if (length($digits) >= 7 && length($digits) <= 15) {
+    if (length($digits) >= 8 && length($digits) <= 15) {
         return "+$digits";
     }
     
@@ -144,8 +144,8 @@ sub validate_phone {
 
     # Accept 10 digits (NANP: NPANXXXXXX)
     # Accept 11 digits starting with 1 (NANP with country code)
-    # Accept 7-15 digits (E.164 international range)
-    return ($digits =~ /^1?\d{10}$/ || $digits =~ /^\d{7,15}$/);
+    # Accept 8-15 digits (E.164 international range, min is 8 for some regions)
+    return ($digits =~ /^1?\d{10}$/ || $digits =~ /^\d{8,15}$/);
 }
 
 sub process_contact_info {
@@ -165,9 +165,9 @@ sub process_contact_info {
     }
     
     # Look for phone patterns anywhere in the message
-    
-    # Pattern 1: E.164 format - must start with + 
-    if ($content =~ /(\+\d{7,15})/) {
+
+    # Pattern 1: E.164 format - must start with +
+    if ($content =~ /(\+\d{8,15})/) {
         my $candidate = $1;
         if (validate_phone($candidate)) {
             $phone = $candidate;

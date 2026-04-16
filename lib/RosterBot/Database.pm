@@ -28,6 +28,8 @@ our @EXPORT = qw(
     db_get_all_active_members
     db_get_active_members_in_server
     db_get_admin_user_ids
+    db_delete_user_email
+    db_delete_user_phone
     db_disconnect
 );
 

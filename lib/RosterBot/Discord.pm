@@ -20,6 +20,8 @@ our @EXPORT = qw(start leave_guild trigger_contact_scheduler discord_shutdown);
 my $DB_PATH = '@DBFILE@';
 my $api_base = 'https://discord.com/api/v10';
 my $PASSWD_FILE = '@PASSWDFILE@';
+# NOTE: Token is loaded at compile time and persists in memory for process lifetime.
+# If the token is rotated, restart the process to reload it.
 my $TOKEN = do {
     open(my $fh, '<', $PASSWD_FILE) or die "Cannot open $PASSWD_FILE: $!\n";
     my $token;
@@ -38,12 +40,15 @@ my $ua;
 my $ws;
 my $shutting_down = 0;
 my %dm_channel_cache;
+my %dm_channel_pending;  # Track in-flight DM channel creations to prevent race conditions
 my $heartbeat_interval;
 my $last_sequence;
 my $session_id;
 my $resume_gateway_url;
 my $heartbeat_timer;
 my $contact_request_timer;
+my $reconnect_attempts = 0;
+my $max_reconnect_attempts = 10;
 
 sub discord_shutdown {
     verbose("Shutting down cleanly...");
@@ -71,6 +76,8 @@ sub start {
     # Initialize HTTP client
     $ua = Mojo::UserAgent->new;
     $ua->inactivity_timeout(300);
+    $ua->request_timeout(30);
+    $ua->connect_timeout(10);
     
     # Connect to gateway
     connect_gateway();
@@ -112,13 +119,12 @@ sub discord_api {
 sub is_dm_blocked {
     my ($response) = @_;
     return 0 unless $response;
-    
+
     if ($response->{code}) {
-        my $code = $response->{code};
-        # Any error should trigger 24-hour backoff
-        return 1 if ($code == 50007 || $code == 340002 || $code == 20026);
+        # Any error triggers 24-hour backoff
+        return 1;
     }
-    
+
     return 0;
 }
 
@@ -130,26 +136,35 @@ sub send_message {
 
 sub get_dm_channel {
     my ($user_id) = @_;
-    
+
     if (exists $dm_channel_cache{$user_id}) {
         debug("Using cached DM channel for user [$user_id]");
         return $dm_channel_cache{$user_id};
     }
-    
+
+    # Prevent race condition: return undef if another request is already creating this channel
+    if ($dm_channel_pending{$user_id}) {
+        debug("DM channel creation already in progress for user [$user_id]");
+        return undef;
+    }
+
     debug("Creating DM channel with user [$user_id]");
-    
-    my $dm_channel = discord_api('POST', "/users/\@me/channels", { 
-        recipient_id => $user_id 
+    $dm_channel_pending{$user_id} = 1;
+
+    my $dm_channel = discord_api('POST', "/users/\@me/channels", {
+        recipient_id => $user_id
     });
-    
+
+    delete $dm_channel_pending{$user_id};
+
     unless ($dm_channel && $dm_channel->{id}) {
         verbose("Failed to create DM channel with user [$user_id]");
         return undef;
     }
-    
+
     $dm_channel_cache{$user_id} = $dm_channel->{id};
     debug("DM channel created and cached: $dm_channel->{id}");
-    
+
     return $dm_channel->{id};
 }
 
@@ -206,7 +221,8 @@ sub send_contact_request {
         verbose("Sent contact request to [$display_name] [$username]");
         return 1;
     } else {
-        verbose("Failed to send contact request to [$display_name] [$username]");
+        my $error_msg = $result->{message} // 'unknown error';
+        verbose("Failed to send contact request to [$display_name] [$username]: $error_msg");
         db_update_last_contact_request($user_id);
         return undef;
     }
@@ -240,8 +256,7 @@ sub request_pending_contacts {
 
         my $uid = $user->{user_id};
         my $uname = $user->{username};
-        my $display = $user->{display_name} || $user->{username};
-        $display =~ s/#.*$//;
+        my $display = extract_display_name($user, $user->{username});
         
         # Schedule non-blocking
         Mojo::IOLoop->timer($delay, sub {
@@ -358,10 +373,17 @@ sub handle_gateway_event {
     if ($op == 10) {
         $heartbeat_interval = $data->{heartbeat_interval};
         verbose("Received HELLO (heartbeat interval: ${heartbeat_interval}ms)");
-        
+
+        # Validate heartbeat interval to prevent division by zero or invalid values
+        if (!$heartbeat_interval || $heartbeat_interval <= 0) {
+            verbose("Invalid heartbeat interval: $heartbeat_interval - closing connection");
+            $ws->finish;
+            return;
+        }
+
         Mojo::IOLoop->remove($heartbeat_timer) if $heartbeat_timer;
         $heartbeat_timer = Mojo::IOLoop->recurring($heartbeat_interval / 1000, sub { send_heartbeat() });
-        
+
         if ($session_id) {
             send_resume();
         } else {
@@ -471,6 +493,7 @@ sub handle_dispatch_event {
                 nick => $member->{nick},
                 global_name => $user->{global_name},
                 joined => $member->{joined_at},
+                pending => $member->{pending} // 0,
             };
 
             my $cache_name = lc($user->{username});
@@ -484,8 +507,7 @@ sub handle_dispatch_event {
                 if (can_send_contact_request()) {
                     my $uid = $user->{id};
                     my $uname = $username;
-                    my $display = $member->{nick} || $user->{global_name} || $username;
-                    $display =~ s/#.*$//; # Strip discriminator
+                    my $display = extract_display_name($member, $username);
 
                     # Schedule non-blocking
                     Mojo::IOLoop->timer($delay, sub {
@@ -493,8 +515,7 @@ sub handle_dispatch_event {
                     });
                     $delay += CONTACT_REQUEST_DELAY;
                 } else {
-                    my $display = $member->{nick} || $user->{global_name} || $username;
-                    $display =~ s/#.*$//;
+                    my $display = extract_display_name($member, $username);
                     push @rate_limited_queue, "$display ($username)";
                 }
             }
@@ -534,6 +555,7 @@ sub handle_dispatch_event {
             nick => $member->{nick},
             global_name => $user->{global_name},
             joined => $member->{joined_at},
+            pending => $member->{pending} // 0,
         };
         
         my $user_cache = get_user_cache();
@@ -568,14 +590,12 @@ sub handle_dispatch_event {
             !$recently_contacted) {
 
             if (can_send_contact_request()) {
-                my $display = $member->{nick} || $user->{global_name} || $username;
-                $display =~ s/#.*$//; # Strip discriminator
+                my $display = extract_display_name($member, $username);
 
                 debug("Sending contact request to [$username]");
                 send_contact_request($user->{id}, $username, $display);
             } else {
-                my $display = $member->{nick} || $user->{global_name} || $username;
-                $display =~ s/#.*$//;
+                my $display = extract_display_name($member, $username);
                 verbose("Rate limit reached; skipped 1 user: $display ($username)");
             }
         } else {
@@ -616,17 +636,30 @@ sub handle_dispatch_event {
         my $member = $data;
         my $guild_id = $member->{guild_id};
         my $user = $member->{user};
-        
+
         my $guilds = get_guilds();
         return unless exists $guilds->{$guild_id};
-        
+
         my $username = $user->{username};
-        $username .= "#" . $user->{discriminator} 
+        $username .= "#" . $user->{discriminator}
             if $user->{discriminator} && $user->{discriminator} ne '0';
-        
+
+        # Check if member was just approved (pending -> false)
+        my $was_pending = exists $guilds->{$guild_id}{members}{$user->{id}}
+            ? $guilds->{$guild_id}{members}{$user->{id}}{pending}
+            : undef;
+        my $is_pending = $member->{pending} // 0;
+
+        if (defined($was_pending) && $was_pending && !$is_pending) {
+            my $display = extract_display_name($member, $username);
+            my $server_name = $guilds->{$guild_id}{name};
+            verbose("Member [$username] approved in [$server_name]");
+            notify_admins("NOTICE: `$display` <`$username`> has been approved in `$server_name`");
+        }
+
         db_upsert_user($user->{id}, $username, $user->{global_name});
         db_upsert_membership($guild_id, $user->{id}, $member->{nick}, 'member', undef);
-        
+
         if (exists $guilds->{$guild_id}{members}{$user->{id}}) {
             my $old_username = $guilds->{$guild_id}{members}{$user->{id}}{username};
             my $user_cache = get_user_cache();
@@ -641,6 +674,7 @@ sub handle_dispatch_event {
             $guilds->{$guild_id}{members}{$user->{id}}{username} = $username;
             $guilds->{$guild_id}{members}{$user->{id}}{nick} = $member->{nick};
             $guilds->{$guild_id}{members}{$user->{id}}{global_name} = $user->{global_name};
+            $guilds->{$guild_id}{members}{$user->{id}}{pending} = $is_pending;
         }
     }
     elsif ($event eq 'GUILD_BAN_ADD') {
@@ -700,7 +734,20 @@ sub connect_gateway {
         
         unless ($tx->is_websocket) {
             verbose("WebSocket handshake failed!");
-            Mojo::IOLoop->timer(15, sub {
+            $reconnect_attempts++;
+
+            if ($reconnect_attempts >= $max_reconnect_attempts) {
+                verbose("Max reconnection attempts reached ($max_reconnect_attempts). Exiting.");
+                Mojo::IOLoop->stop();
+                exit 1;
+            }
+
+            # Exponential backoff: 2^attempts seconds, capped at 300 (5 minutes)
+            my $delay = 2 ** $reconnect_attempts;
+            $delay = 300 if $delay > 300;
+            verbose("Reconnecting in $delay seconds (attempt $reconnect_attempts/$max_reconnect_attempts)...");
+
+            Mojo::IOLoop->timer($delay, sub {
                 connect_gateway();
             });
             return;
@@ -709,6 +756,7 @@ sub connect_gateway {
         verbose("WebSocket connected!");
         $tx->max_websocket_size(10 * 1024 * 1024);  # 10 MB; default 256 KB is too small for large guild member chunks
         $ws = $tx;
+        $reconnect_attempts = 0;  # Reset on successful connection
         
         $tx->on(json => sub {
             my ($tx, $payload) = @_;
@@ -727,8 +775,21 @@ sub connect_gateway {
                 Mojo::IOLoop->stop();
                 return;
             }
-            Mojo::IOLoop->timer(5, sub {
-                verbose("Reconnecting...");
+
+            $reconnect_attempts++;
+
+            if ($reconnect_attempts >= $max_reconnect_attempts) {
+                verbose("Max reconnection attempts reached ($max_reconnect_attempts). Exiting.");
+                Mojo::IOLoop->stop();
+                exit 1;
+            }
+
+            # Exponential backoff: 2^attempts seconds, capped at 300 (5 minutes)
+            my $delay = 2 ** $reconnect_attempts;
+            $delay = 300 if $delay > 300;
+            verbose("Reconnecting in $delay seconds (attempt $reconnect_attempts/$max_reconnect_attempts)...");
+
+            Mojo::IOLoop->timer($delay, sub {
                 connect_gateway();
             });
         });

@@ -460,7 +460,8 @@ fi
 cat <<SUMMARY2
 
 Now run:
-  make           # syntax-check Perl source files
+  make           # substitute paths into build/
+  make test      # optional: syntax-check built files
   make install   # install (requires root)
 
 SUMMARY2

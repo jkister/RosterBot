@@ -13,6 +13,9 @@ use RosterBot::Contact qw(:DEFAULT CONTACT_REQUEST_INTERVAL);
 
 our @EXPORT = qw(handle_message);
 
+# Discord message limit is 2000 chars; use 1800 to leave safety margin for formatting
+use constant DISCORD_MESSAGE_CHUNK_LIMIT => 1800;
+
 sub handle_message {
     my ($msg, $send_message, $send_dm_to_user, $notify_admins, $send_contact_request) = @_;
     
@@ -320,31 +323,6 @@ sub handle_message {
             $send_message->($msg->{channel_id}, $response);
         }
     }
-    elsif ($content =~ /^admin message (.+)$/is) {
-        $is_command = 1;
-        
-        unless ($is_admin) {
-            $rejected_command = 1;
-        } else {
-            my $message_content = $1;
-            my @admin_ids = db_get_admin_user_ids();
-            my $sent_count = 0;
-            my $delay = 0;
-            
-            for my $admin_id (@admin_ids) {
-                next if $admin_id eq $author_id;
-                
-                Mojo::IOLoop->timer($delay, sub {
-                    my $result = $send_dm_to_user->($admin_id, $message_content);
-                    verbose("Failed to send 'admin message' to [$admin_id]") unless $result;
-                });
-                $delay += 1;
-                $sent_count++;
-            }
-            
-            $send_message->($msg->{channel_id}, "Message sent to $sent_count admin(s)");
-        }
-    }
     elsif ($content =~ /^list users(?:\s+(pending|contacted|provided|stopped|banned))?(?:\s+(count))?$/i) {
         $is_command = 1;
         
@@ -394,10 +372,11 @@ sub handle_message {
                         $response .= " [Next: eligible now]";
                     }
                 }
-                
+
+
                 $response .= "\n";
-                
-                if (length($response) > 1800) {
+
+                if (length($response) > DISCORD_MESSAGE_CHUNK_LIMIT) {
                     push @chunks, $response;
                     $response = "";
                 }
@@ -413,83 +392,7 @@ sub handle_message {
             my $cid = $msg->{channel_id};
             for my $chunk (@chunks) {
                 Mojo::IOLoop->timer($delay, sub { $send_message->($cid, $chunk) });
-                $delay += 1;
-            }
-        }
-    }
-    elsif ($content =~ /^message all (.+)$/is) {
-        $is_command = 1;
-        
-        unless ($is_admin) {
-            $rejected_command = 1;
-        } else {
-            my $message_content = $1;
-            my @members = db_get_all_active_members();
-            my $bot_id = get_bot_user()->{id};
-            my $sent_count = 0;
-            my $delay = 0;
-
-            for my $member (@members) {
-                next if $member->{user_id} eq $bot_id;
-                
-                my $uid = $member->{user_id};
-                Mojo::IOLoop->timer($delay, sub {
-                    my $result = $send_dm_to_user->($uid, $message_content);
-                    verbose("Failed to send 'message all' to [$uid]") unless $result;
-                });
-                $delay += 1;
-                $sent_count++;
-            }
-
-            my $response = "Sending message to $sent_count users";
-            $send_message->($msg->{channel_id}, $response);
-        }
-    }
-    elsif ($content =~ /^message members "([^"]+)" (.+)$/is) {
-        $is_command = 1;
-        
-        unless ($is_admin) {
-            $rejected_command = 1;
-        } else {
-            my $server_name = $1;
-            my $message_content = $2;
-            
-            my $guilds = get_guilds();
-            my $found_guild;
-            for my $guild_id (keys %$guilds) {
-                if (lc($guilds->{$guild_id}{name}) eq lc($server_name)) {
-                    $found_guild = $guild_id;
-                    last;
-                }
-            }
-            
-            if ($found_guild) {
-                my @members = db_get_active_members_in_server($found_guild);
-                my $bot_id = get_bot_user()->{id};
-                my $sent_count = 0;
-                my $delay = 0;
-
-                for my $member (@members) {
-                    next if $member->{user_id} eq $bot_id;
-                    
-                    my $uid = $member->{user_id};
-                    Mojo::IOLoop->timer($delay, sub {
-                        my $result = $send_dm_to_user->($uid, $message_content);
-                        verbose("Failed to send 'message members' to [$uid]") unless $result;
-                    });
-                    $delay += 1;
-                    $sent_count++;
-                }
-                
-                my $response = "Sending message to $sent_count users in `$server_name`";
-                $send_message->($msg->{channel_id}, $response);
-            } else {
-                my @available = sort map { $guilds->{$_}{name} } keys %$guilds;
-                my $response = "Could not find server '$server_name'.\n\n" .
-                              "Available servers:\n" .
-                              join("\n", map { "- `$_`" } @available);
-                
-                $send_message->($msg->{channel_id}, $response);
+                $delay = ($delay + 1) > 60 ? 60 : ($delay + 1);  # Cap at 60 seconds
             }
         }
     }
@@ -567,7 +470,7 @@ sub handle_message {
 
                     $response .= "- `$display_name` -> `$member->{username}`\n";
 
-                    if (length($response) > 1800) {
+                    if (length($response) > DISCORD_MESSAGE_CHUNK_LIMIT) {
                         push @chunks, $response;
                         $response = "";
                     }
@@ -624,7 +527,7 @@ sub handle_message {
 
                 $response .= "- `$display_name` -> `$member->{username}`\n";
 
-                if (length($response) > 1800) {
+                if (length($response) > DISCORD_MESSAGE_CHUNK_LIMIT) {
                     push @chunks, $response;
                     $response = "";
                 }
@@ -635,7 +538,7 @@ sub handle_message {
             my $cid = $msg->{channel_id};
             for my $chunk (@chunks) {
                 Mojo::IOLoop->timer($delay, sub { $send_message->($cid, $chunk) });
-                $delay += 1;
+                $delay = ($delay + 1) > 60 ? 60 : ($delay + 1);  # Cap at 60 seconds
             }
         }
     }
@@ -669,12 +572,9 @@ sub handle_message {
 - `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped, banned; add 'count' to show only totals)
 - `server leave "<server name>"` - Leave a server
 - `message <username> <your message>` - Send a DM to a user
-- `message all <your message>` - Send a DM to all known users
-- `message members "<server name>" <your message>` - Send a DM to all users in a server
 - `admin grant <username>` - Grant admin privileges for the bot
 - `admin revoke <username>` - Revoke admin privileges from the bot
 - `admin list` - List all admins of the bot
-- `admin message <your message>` - Send message to all other admins
 - `user show <username>` - Show user's contact information
 - `user update <username> email <email>` - Update user's email
 - `user update <username> phone <phone>` - Update user's phone
@@ -696,7 +596,6 @@ Examples:
 - `message hackerx_67 Hey, how are you?`
 - `contact resend someguy`
 - `user update alice email alice@example.com`
-- `admin message Emergency meeting in 5 minutes`
 - `update email john@example.com`
 
 Note: Server names must be in quotes. Usernames are case-insensitive.

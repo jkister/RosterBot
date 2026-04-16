@@ -19,6 +19,7 @@ our @EXPORT = qw(
     get_display_name_in_guild
     get_username_in_guild
     normalize_unicode
+    extract_display_name
     get_guilds
     get_user_cache
     get_bot_user
@@ -66,15 +67,26 @@ sub set_bot_user { $bot_user = $_[0]; }
 
 sub normalize_unicode {
     my ($content) = @_;
-    
+
     # Normalize Unicode quotes and apostrophes to ASCII
     $content =~ s/[\x{201C}\x{201D}\x{201E}\x{201F}\x{2033}\x{2036}]/"/g;  # Various double quotes
     $content =~ s/[\x{2018}\x{2019}\x{201A}\x{201B}\x{2032}\x{2035}]/'/g;  # Various single quotes/apostrophes
     $content =~ s/[\x{00AB}\x{00BB}]/"/g;  # Guillemets (angle quotes)
     $content =~ s/[\x{2013}\x{2014}\x{2010}\x{2011}\x{2212}]/-/g;  # En dash, em dash, hyphens, minus
     $content =~ s/\x{2026}/.../g;  # Ellipsis
-    
+
+    # Strip invisible/zero-width characters that could break command parsing
+    $content =~ s/[\x{200B}\x{200C}\x{200D}\x{FEFF}]//g;  # Zero-width space, ZWNJ, ZWJ, BOM
+    $content =~ s/\x{00A0}/ /g;  # Non-breaking space to regular space
+
     return $content;
+}
+
+sub extract_display_name {
+    my ($member_or_user, $username) = @_;
+    my $display = $member_or_user->{nick} || $member_or_user->{global_name} || $username;
+    $display =~ s/#.*$//;  # Strip discriminator (TODO: Remove after 2026 when all usernames migrated)
+    return $display;
 }
 
 sub find_user_by_name {
