@@ -58,7 +58,7 @@ BUILD_FILES = $(BUILD_SCRIPTS) $(BUILD_LIBS) $(BUILD_SERVICE_$(PROCESS_MANAGER))
 
 .PHONY: all build test install install-dirs install-user install-files \
         install-db install-service install-systemd install-daemontools \
-        install-initd install-start uninstall clean distclean
+        install-initd uninstall clean distclean
 
 # ---------------------------------------------------------------------------
 # Default target: build processed files into build/
@@ -182,7 +182,7 @@ test: build
 # Install
 # ---------------------------------------------------------------------------
 install: build install-dirs install-user install-files install-db \
-         install-service install-start
+         install-service
 	@echo ""
 	@echo "RosterBot installation complete."
 	@echo ""
@@ -199,13 +199,13 @@ install: build install-dirs install-user install-files install-db \
 	echo "  $$step. Customize the scammer warning message (optional):"; \
 	echo "       $(SCAMMERMSGFILE)"; \
 	step=$$((step+1)); \
-	echo "  $$step. Ensure the service is running:"; \
+	echo "  $$step. Start the service:"; \
 	if [ "$(PROCESS_MANAGER)" = "systemd" ]; then \
-		echo "       systemctl status rosterbot"; \
+		echo "       systemctl start rosterbot"; \
 	elif [ "$(PROCESS_MANAGER)" = "daemontools" ]; then \
-		echo "       svstat $(SERVICE_DIR)/rosterbot"; \
+		echo "       svc -u $(SERVICE_DIR)/rosterbot"; \
 	else \
-		echo "       /etc/init.d/rosterbot status"; \
+		echo "       /etc/init.d/rosterbot start"; \
 	fi; \
 	step=$$((step+1)); \
 	if [ -z "$(ADMIN_ID)" ] && [ -f "$(DBFILE)" ]; then \
@@ -388,25 +388,6 @@ install-initd: _check-root
 	fi
 	install -m 0644 $(BUILDDIR)/logrotate.d/rosterbot /etc/logrotate.d/rosterbot
 	@echo "  init.d script and logrotate config installed."
-
-install-start:
-	@echo "Starting RosterBot..."
-	@if [ "$(PROCESS_MANAGER)" = "systemd" ]; then \
-		systemctl restart rosterbot; \
-		sleep 2; \
-		systemctl is-active rosterbot && echo "  RosterBot is running." \
-			|| echo "  WARNING: RosterBot may not have started. Check: journalctl -u rosterbot"; \
-	elif [ "$(PROCESS_MANAGER)" = "daemontools" ]; then \
-		if [ -L "$(SERVICE_DIR)/rosterbot" ]; then \
-			svc -u $(SERVICE_DIR)/rosterbot 2>/dev/null || true; \
-			sleep 2; \
-			svstat $(SERVICE_DIR)/rosterbot || true; \
-		else \
-			echo "  WARNING: $(SERVICE_DIR)/rosterbot symlink missing, cannot start automatically."; \
-		fi; \
-	elif [ "$(PROCESS_MANAGER)" = "initd" ]; then \
-		/etc/init.d/rosterbot restart || true; \
-	fi
 
 # ---------------------------------------------------------------------------
 # Uninstall
