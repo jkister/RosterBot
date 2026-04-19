@@ -635,28 +635,28 @@ sub handle_message {
             my $response = <<'HELP';
 **RosterBot Commands (Admin Only)**
 
-- `list servers` - Show all servers I'm in
-- `list members` - Show all members from all servers
-- `list members "<server name>"` - Show members of a specific server
-- `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped, banned; add 'count' to show only totals)
-- `server leave "<server name>"` - Leave a server
-- `message <username> <your message>` - Send a DM to a user
 - `admin grant <username>` - Grant admin privileges for the bot
-- `admin revoke <username>` - Revoke admin privileges from the bot
 - `admin list` - List all admins of the bot
 - `admin notify_only <username>` - Temporarily redirect all admin notifications to one admin (runtime only, resets on restart)
 - `admin notify_only --reset` - Restore notification target to config value
+- `admin revoke <username>` - Revoke admin privileges from the bot
+- `generate invite` - Generate bot invite link
+- `list members` - Show all members from all servers
+- `list members "<server name>"` - Show members of a specific server
+- `list servers` - Show all servers I'm in
+- `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped, banned; add 'count' to show only totals)
+- `message <username> <your message>` - Send a DM to a user
+- `print contact` - Show contact request message
+- `print scammer` - Show scammer warning message
+- `resend contact <username>` - Force send contact request
+- `resend scammer <username>` - Force send scammer warning
+- `scheduler trigger` - Run contact scheduler immediately
+- `server leave "<server name>"` - Leave a server
+- `user delete <username> email` - Delete user's email
+- `user delete <username> phone` - Delete user's phone
 - `user show <username>` - Show user's contact information
 - `user update <username> email <email>` - Update user's email
 - `user update <username> phone <phone>` - Update user's phone
-- `user delete <username> email` - Delete user's email
-- `user delete <username> phone` - Delete user's phone
-- `print contact` - Show contact request message
-- `resend contact <username>` - Force send contact request
-- `print scammer` - Show scammer warning message
-- `resend scammer <username>` - Force send scammer warning
-- `scheduler trigger` - Run contact scheduler immediately
-- `generate invite` - Generate bot invite link
 
 **User Commands (Anyone):**
 - `STOP` - Stop contact information requests
