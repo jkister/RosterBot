@@ -759,22 +759,22 @@ sub handle_dispatch_event {
         my $server_name = $guilds->{$guild_id}{name};
         verbose("Member [$username] joined [$server_name]");
 
-        my $contact_info_pre = db_get_user_contact_info($user->{id});
-        my $needs_scammer_warning = $contact_info_pre &&
-            !$contact_info_pre->{scammer_ack} &&
-            $contact_info_pre->{contact_status} ne STATUS_STOPPED &&
-            $contact_info_pre->{contact_status} ne STATUS_BANNED;
-
-        my $join_notice = "NOTICE: `$username` has joined `$server_name`";
-        $join_notice .= " (sending scammer warning)" if $needs_scammer_warning;
-        notify_admins($join_notice);
-
-        my $contact_info = $contact_info_pre;
+        my $contact_info = db_get_user_contact_info($user->{id});
 
         unless ($contact_info) {
             verbose("ERROR: No contact_info for [$username] <$user->{id}>");
             return;
         }
+
+        my $needs_scammer_warning = !$contact_info->{scammer_ack} &&
+            $contact_info->{contact_status} ne STATUS_STOPPED &&
+            $contact_info->{contact_status} ne STATUS_BANNED &&
+            !$contact_info->{last_scammer_warning} &&
+            !$scammer_warning_scheduled{$user->{id}};
+
+        my $join_notice = "NOTICE: `$username` has joined `$server_name`";
+        $join_notice .= " (sending scammer warning)" if $needs_scammer_warning;
+        notify_admins($join_notice);
 
         debug("Contact info for [$username]:");
         debug("  Status:          $contact_info->{contact_status}");
@@ -786,10 +786,8 @@ sub handle_dispatch_event {
 
         my $display = extract_display_name($member, $username);
 
-        if (!$contact_info->{scammer_ack} &&
-            $contact_info->{contact_status} ne STATUS_STOPPED &&
-            $contact_info->{contact_status} ne STATUS_BANNED &&
-            !$contact_info->{last_scammer_warning}) {
+        if ($needs_scammer_warning) {
+            $scammer_warning_scheduled{$user->{id}} = 1;
             if (can_send_contact_request()) {
                 debug("Sending scammer warning to [$username] (no ACK yet)");
                 send_scammer_warning($user->{id}, $username, $display);
