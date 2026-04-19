@@ -55,9 +55,9 @@ sub handle_message {
             $send_message->($msg->{channel_id}, $response);
         }
     }
-    elsif ($content =~ /^contact print$/i) {
+    elsif ($content =~ /^print contact$/i) {
         $is_command = 1;
-        
+
         unless ($is_admin) {
             $rejected_command = 1;
         } else {
@@ -65,17 +65,16 @@ sub handle_message {
             $send_message->($msg->{channel_id}, "**Contact Request Message:**\n\n$contact_msg");
         }
     }
-    elsif ($content =~ /^contact resend (\S+)$/i) {
+    elsif ($content =~ /^resend contact (\S+)$/i) {
         $is_command = 1;
-        
+
         unless ($is_admin) {
             $rejected_command = 1;
         } else {
             my $target_username = $1;
             my $target_user_id = find_user_by_name($target_username);
-            
+
             if ($target_user_id) {
-                # Force send - bypass all checks
                 my $result = $send_contact_request->($target_user_id);
 
                 if ($result) {
@@ -83,6 +82,40 @@ sub handle_message {
                     verbose("Admin forced contact request to [$target_username]");
                 } else {
                     $send_message->($msg->{channel_id}, "Failed to send contact request to $target_username");
+                }
+            } else {
+                $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
+            }
+        }
+    }
+    elsif ($content =~ /^print scammer$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            my $scammer_msg = get_scammer_warning_message();
+            $send_message->($msg->{channel_id}, "**Scammer Warning Message:**\n\n$scammer_msg");
+        }
+    }
+    elsif ($content =~ /^resend scammer (\S+)$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            my $target_username = $1;
+            my $target_user_id = find_user_by_name($target_username);
+
+            if ($target_user_id) {
+                my $scammer_msg = get_scammer_warning_message();
+                my $result = $send_dm_to_user->($target_user_id, $scammer_msg);
+
+                if ($result) {
+                    $send_message->($msg->{channel_id}, "Scammer warning sent to $target_username");
+                    verbose("Admin forced scammer warning to [$target_username]");
+                } else {
+                    $send_message->($msg->{channel_id}, "Failed to send scammer warning to $target_username");
                 }
             } else {
                 $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
@@ -618,8 +651,10 @@ sub handle_message {
 - `user update <username> phone <phone>` - Update user's phone
 - `user delete <username> email` - Delete user's email
 - `user delete <username> phone` - Delete user's phone
-- `contact print` - Show contact request message
-- `contact resend <username>` - Force send contact request
+- `print contact` - Show contact request message
+- `resend contact <username>` - Force send contact request
+- `print scammer` - Show scammer warning message
+- `resend scammer <username>` - Force send scammer warning
 - `scheduler trigger` - Run contact scheduler immediately
 - `generate invite` - Generate bot invite link
 
@@ -630,7 +665,7 @@ Examples:
 - `list members "My Cool Server"`
 - `list users pending`
 - `message hackerx_67 Hey, how are you?`
-- `contact resend someguy`
+- `resend contact someguy`
 - `user update alice email alice@example.com`
 
 Note: Server names must be in quotes. Usernames are case-insensitive.
@@ -716,7 +751,7 @@ HELP
     
     # ========== SYNTAX ERROR CATCH-ALL ==========
     
-    elsif ($content =~ /^(list|message|admin|generate|user|contact|server)\s/i) {
+    elsif ($content =~ /^(list|message|admin|generate|user|server|print|resend)\s/i) {
         $is_command = 1;
         $syntax_error = 1;
         
