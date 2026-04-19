@@ -14,3 +14,6 @@
 
 # Send admin notifications only to this Discord username (instead of all admins)
 #notify-only=
+
+# Role name that triggers user approval (exact match, case-sensitive)
+#approval-role=approved

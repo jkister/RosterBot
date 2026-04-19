@@ -50,6 +50,7 @@ my $contact_request_timer;
 my $scammer_warning_timer;
 my $reconnect_attempts = 0;
 my $max_reconnect_attempts = 10;
+my $approval_role;
 
 sub discord_shutdown {
     verbose("Shutting down cleanly...");
@@ -69,6 +70,7 @@ sub start {
     my ($opt) = @_;
     
     RosterBot::Utils::set_debug_flag($opt->{debug});
+    $approval_role = $opt->{approval_role};
     verbose("Starting Discord bot...");
     
     # Initialize database
@@ -632,26 +634,20 @@ sub handle_dispatch_event {
             my $uname   = $username;
             my $display = extract_display_name($member, $username);
 
-            # Catch screening approvals that happened while the bot was offline
-            if ($contact_info &&
-                !($member->{pending} // 0) &&
-                $contact_info->{approval_status} eq APPROVAL_PENDING) {
-                verbose("Detected offline approval for [$username] - marking approved");
-                db_set_user_approved($uid);
-                notify_admins("**USER APPROVED** `$display` <`$username`> was approved while bot was offline");
-                $contact_info = db_get_user_contact_info($uid);  # refresh
-            }
-
-            # Catch role grants that happened while the bot was offline
+            # Catch approval role grants that happened while the bot was offline
             if ($contact_info &&
                 $contact_info->{approval_status} eq APPROVAL_PENDING &&
+                $approval_role &&
                 @{$member->{roles} // []}) {
                 for my $role_id (@{$member->{roles}}) {
-                    my $role_name = $guilds->{$guild_id}{roles}{$role_id} // $role_id;
-                    verbose("Detected offline role grant [$role_name] for [$username]");
-                    handle_role_granted($uid, $uname, $display, $role_name, $guilds->{$guild_id}{name});
+                    my $role_name = $guilds->{$guild_id}{roles}{$role_id} // next;
+                    if ($role_name eq $approval_role) {
+                        verbose("Detected offline approval role [$role_name] for [$username]");
+                        db_set_user_approved($uid);
+                        $contact_info = db_get_user_contact_info($uid);  # refresh
+                        last;
+                    }
                 }
-                $contact_info = db_get_user_contact_info($uid);  # refresh
             }
 
             if ($contact_info && !$contact_info->{scammer_ack} &&
@@ -762,7 +758,9 @@ sub handle_dispatch_event {
 
         if (!$contact_info->{scammer_ack} &&
             $contact_info->{contact_status} ne STATUS_STOPPED &&
-            $contact_info->{contact_status} ne STATUS_BANNED) {
+            $contact_info->{contact_status} ne STATUS_BANNED &&
+            !$contact_info->{last_scammer_warning}) {
+            db_update_last_scammer_warning($user->{id});
             if (can_send_contact_request()) {
                 debug("Sending scammer warning to [$username] (no ACK yet)");
                 send_scammer_warning($user->{id}, $username, $display);

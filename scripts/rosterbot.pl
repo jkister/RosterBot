@@ -37,6 +37,7 @@ GetOptions(
     'debug|D'        => \$opt{debug},
     'no-contact|n'   => \$opt{no_contact},
     'notify-only=s'  => \$opt{notify_only},
+    'approval-role=s'=> \$opt{approval_role},
     'help|h'         => \$opt{help},
 ) or die "Error parsing options\n";
 
@@ -49,12 +50,14 @@ Options:
     -n, --no-contact         Disable automatic contact requests
     --notify-only=USERNAME   Send admin notifications only to USERNAME
                              (instead of all admins)
+    --approval-role=ROLE     Role name that triggers user approval
     -h, --help               Do not print this help message
 
 Config file: $CONF_FILE
     debug=1
     no-contact=1
     notify-only=username
+    approval-role=approved
 
 CLI flags override config file settings.
 HELP
@@ -70,6 +73,9 @@ if (!defined $opt{no_contact} && defined $conf{'no-contact'}) {
 }
 if (!defined $opt{notify_only} && defined $conf{'notify-only'} && $conf{'notify-only'} ne '') {
     $opt{notify_only} = $conf{'notify-only'};
+}
+if (!defined $opt{approval_role} && defined $conf{'approval-role'} && $conf{'approval-role'} ne '') {
+    $opt{approval_role} = $conf{'approval-role'};
 }
 
 # enable debug here since its not set before disable_contact_requests
