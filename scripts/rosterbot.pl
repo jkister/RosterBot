@@ -18,14 +18,14 @@ my $CONF_FILE = '@ETCDIR@/rosterbot.conf';
 # Read config file first; CLI flags override
 my %conf;
 if (-f $CONF_FILE) {
-    open(my $fh, '<', $CONF_FILE) or warn "Cannot read $CONF_FILE: $!\n";
+    open(my $fh, '<', $CONF_FILE) or die "Cannot read $CONF_FILE: $!\n";
     while (<$fh>) {
         chomp;
         s/#.*//;        # strip comments
         s/^\s+|\s+$//g; # strip surrounding whitespace
         next unless /\S/;
-        if (/^([\w-]+)\s*=\s*(.*)$/) {
-            $conf{$1} = $2;
+        if (/^([\w-]+)\s*=\s*(.+?)?\s*$/) {
+            $conf{$1} = $2 // '';
         }
     }
     close $fh;
@@ -87,11 +87,22 @@ RosterBot::Contact::set_disable_contact_requests($opt{no_contact} || 0);
 # Set notify-only user
 RosterBot::Utils::set_notify_only_user($opt{notify_only}) if $opt{notify_only};
 
+# Validate approval-role
+if (defined $opt{approval_role} && $opt{approval_role} =~ /^\s*$/) {
+    die "approval-role cannot be empty\n";
+}
+
 # Handle graceful shutdown
 $SIG{TERM} = $SIG{INT} = sub {
     RosterBot::Utils::verbose("Received shutdown signal, cleaning up...");
     RosterBot::Discord::discord_shutdown();
-    RosterBot::Database::db_disconnect();
+    eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm(5);
+        RosterBot::Database::db_disconnect();
+        alarm(0);
+    };
+    alarm(0);
 };
 
 # Start the Discord bot

@@ -51,6 +51,7 @@ my $scammer_warning_timer;
 my $reconnect_attempts = 0;
 my $max_reconnect_attempts = 10;
 my $approval_role;
+my %scammer_warning_scheduled;
 
 sub discord_shutdown {
     verbose("Shutting down cleanly...");
@@ -105,6 +106,9 @@ sub discord_api {
     $tx = $ua->start($tx);
     
     if (my $err = $tx->error) {
+        if (($tx->res->code // 0) == 401) {
+            die "Discord token rejected (401 Unauthorized) - restart with a valid token\n";
+        }
         verbose("API Error: $err->{message}");
         debug("Response: " . $tx->res->body) if $tx->res->body;
         return undef;
@@ -179,7 +183,14 @@ sub send_dm_to_user {
     return undef unless $channel_id;
 
     debug("Sending DM to [" . get_display_name($user_id) . "] [" . get_username($user_id) . "]");
-    return send_message($channel_id, $content);
+    my $result = send_message($channel_id, $content);
+
+    if (!$result || ($result->{code} && ($result->{code} == 50007 || $result->{code} == 10003))) {
+        debug("Invalidating DM channel cache for [$user_id] after send failure");
+        delete $dm_channel_cache{$user_id};
+    }
+
+    return $result;
 }
 
 sub handle_role_granted {
@@ -222,16 +233,22 @@ sub verbose_rate_limit_skip {
 }
 
 sub schedule_with_retry {
-    my ($send_fn, $description, $extra_delay) = @_;
+    my ($send_fn, $description, $extra_delay, $attempts) = @_;
     $extra_delay //= 0;
+    $attempts    //= 0;
+
+    if ($attempts >= 10) {
+        verbose("Giving up on $description after $attempts retries");
+        return;
+    }
 
     my $delay = get_retry_delay_seconds() + $extra_delay;
-    verbose("Rate limited; scheduling retry for $description in ${delay}s");
+    verbose("Rate limited; scheduling retry for $description in ${delay}s (attempt " . ($attempts + 1) . "/10)");
     Mojo::IOLoop->timer($delay, sub {
         if (can_send_contact_request()) {
             $send_fn->();
         } else {
-            schedule_with_retry($send_fn, $description, 0);
+            schedule_with_retry($send_fn, $description, 0, $attempts + 1);
         }
     });
 }
@@ -307,6 +324,7 @@ sub send_scammer_warning {
     }
 
     db_update_last_scammer_warning($user_id);
+    delete $scammer_warning_scheduled{$user_id};
     increment_contact_request_count();
     verbose("Sent scammer warning to [$display_name] [$username]");
     return 1;
@@ -493,9 +511,10 @@ sub handle_gateway_event {
         $heartbeat_interval = $data->{heartbeat_interval};
         verbose("Received HELLO (heartbeat interval: ${heartbeat_interval}ms)");
 
-        # Validate heartbeat interval to prevent division by zero or invalid values
-        if (!$heartbeat_interval || $heartbeat_interval <= 0) {
-            verbose("Invalid heartbeat interval: $heartbeat_interval - closing connection");
+        # Validate heartbeat interval
+        if (!$heartbeat_interval || $heartbeat_interval !~ /^\d+$/ ||
+            $heartbeat_interval <= 0 || $heartbeat_interval > 300000) {
+            verbose("Invalid heartbeat interval: " . ($heartbeat_interval // 'undef') . " - closing connection");
             $ws->finish;
             return;
         }
@@ -606,6 +625,10 @@ sub handle_dispatch_event {
         my $bot_id = get_bot_user()->{id};
         my $delay = 0;
 
+        if (!@$members && ($data->{chunk_count} // 1) > 1) {
+            verbose("WARNING: Empty member chunk received for [$guilds->{$guild_id}{name}] (chunk $data->{chunk_index}/$data->{chunk_count})");
+        }
+
         for my $member (@$members) {
             my $user = $member->{user};
             next if $user->{id} eq $bot_id;
@@ -653,11 +676,10 @@ sub handle_dispatch_event {
             if ($contact_info && !$contact_info->{scammer_ack} &&
                 $contact_info->{contact_status} ne STATUS_STOPPED &&
                 $contact_info->{contact_status} ne STATUS_BANNED &&
-                !$contact_info->{last_scammer_warning}) {
+                !$contact_info->{last_scammer_warning} &&
+                !$scammer_warning_scheduled{$uid}) {
 
-                # Schedule non-blocking scammer warning
-                # Mark the timestamp immediately so other guild chunks don't re-queue this user
-                db_update_last_scammer_warning($uid);
+                $scammer_warning_scheduled{$uid} = 1;
                 Mojo::IOLoop->timer($delay, sub {
                     send_scammer_warning($uid, $uname, $display);
                 });
@@ -760,7 +782,6 @@ sub handle_dispatch_event {
             $contact_info->{contact_status} ne STATUS_STOPPED &&
             $contact_info->{contact_status} ne STATUS_BANNED &&
             !$contact_info->{last_scammer_warning}) {
-            db_update_last_scammer_warning($user->{id});
             if (can_send_contact_request()) {
                 debug("Sending scammer warning to [$username] (no ACK yet)");
                 send_scammer_warning($user->{id}, $username, $display);

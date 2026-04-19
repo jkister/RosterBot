@@ -105,8 +105,8 @@ sub extract_display_name {
 
 sub find_user_by_name {
     my ($username) = @_;
-    
-    my $search_name = lc($username);
+
+    my $search_name = lc(normalize_unicode($username));
     $search_name =~ s/#.*$//;
     
     debug("Searching for user: [$search_name]");

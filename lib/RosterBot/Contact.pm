@@ -158,7 +158,11 @@ sub increment_contact_request_count {
 sub validate_email {
     my ($email) = @_;
 
-    my $code = Mail::VRFY::CheckAddress(addr => $email, method => 'compat');
+    my $code = eval { Mail::VRFY::CheckAddress(addr => $email, method => 'compat') };
+    if ($@) {
+        RosterBot::Utils::verbose("WARNING: Mail::VRFY failed for [$email]: $@");
+        return (0, "Validation error");
+    }
     return ($code == 0, Mail::VRFY::English($code));
 }
 
@@ -238,8 +242,8 @@ sub was_contacted_within_interval {
 
 sub get_contact_message {
     if (open(my $fh, '<', $CONTACT_MESSAGE_FILE)) {
-        local $/;
-        my $msg = <$fh>;
+        my $msg;
+        read($fh, $msg, 2048);
         close $fh;
         return $msg if defined $msg && $msg ne '';
         RosterBot::Utils::verbose("WARNING: $CONTACT_MESSAGE_FILE is empty, using built-in default");
@@ -260,8 +264,8 @@ CONTACT
 
 sub get_scammer_warning_message {
     if (open(my $fh, '<', $SCAMMER_MESSAGE_FILE)) {
-        local $/;
-        my $msg = <$fh>;
+        my $msg;
+        read($fh, $msg, 2048);
         close $fh;
         return $msg if defined $msg && $msg ne '';
         RosterBot::Utils::verbose("WARNING: $SCAMMER_MESSAGE_FILE is empty, using built-in default");

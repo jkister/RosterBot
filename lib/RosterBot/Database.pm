@@ -164,14 +164,24 @@ sub db_delete_user_phone {
 
 sub db_update_contact_status {
     my ($user_id, $status) = @_;
-    
+
     my $sth = $dbh->prepare(q{
+        SELECT contact_status FROM users WHERE user_id = ?
+    });
+    $sth->execute($user_id);
+    my ($old_status) = $sth->fetchrow_array();
+
+    $sth = $dbh->prepare(q{
         UPDATE users
         SET contact_status = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
     });
     $sth->execute($status, $user_id);
+
+    if (defined $old_status && $old_status ne $status) {
+        warn "[" . scalar(localtime) . "] Contact status [$user_id]: $old_status -> $status\n";
+    }
 }
 
 sub db_update_last_contact_request {
