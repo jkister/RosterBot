@@ -22,7 +22,7 @@ requesting it and saves the response to a database.
 - **Language**: Perl 5.020+
 - **Discord integration**: Mojo::UserAgent, Mojo::IOLoop, Mojo::JSON (async WebSocket via Mojo framework)
 - **Database**: SQLite via DBI
-- **Validation**: Mail::VRFY (email), regex/E.164 digit-count (phone)
+- **Validation**: Mail::VRFY syntax+DNS (method='compat', with English error reporting), regex/E.164 digit-count (phone)
 - **Process supervision**: daemontools/supervise
 
 ## Source Files
@@ -46,12 +46,18 @@ requesting it and saves the response to a database.
 
 ## Key Behavior
 
-- Contact requests are rate-limited: 1/minute, 8/10 minutes, 30/hour; re-sent after 7-day interval (30s stagger between sends)
+- DM rate limits: 2/minute, 8/10 minutes, 30/hour; rate-limited sends are queued and retried (not dropped) after the next bucket opens (62s/602s/3602s with jitter buffer)
+- Scammer warning: sent once on join (timestamp recorded immediately to prevent multi-guild duplicates); resent every 24 hours until ACKed
+- Contact request: sent after scammer ACK + role grant; resent every 7 days (604800s); 30s stagger between bulk sends
+- Two-stage user flow: scammer ACK (user types exact phrase) → admin grants role in Discord server → contact request sent
+- Approval: triggered by role grant (GUILD_MEMBER_UPDATE role diff) or Discord Membership Screening (pending→false); offline role grants detected on GUILD_MEMBERS_CHUNK startup
 - Contact statuses: `pending`, `contacted`, `provided`, `stopped` (STOP command opt-out), `banned`
-- DM blocking (Discord errors 50007, 340002, 20026) triggers 24-hour backoff
+- Approval statuses: `pending`, `approved` — set to `approved` on role grant or screening approval; reset to `pending` on rejoin
+- Scammer ACK: user must type exact phrase; sets `scammer_ack=1`; notifies admins; does NOT approve user
+- ROLE GRANTED admin notice warns if user has not yet ACKed the scammer message
 - Non-command DMs from known members are relayed to admins
-- Significant events (joins, departures, contact updates) notify admins via DM
-- Default admin user ID: `1388031297036750958` (jkister), seeded in SQL
+- Significant events (joins, departures, role changes, contact updates) notify admins via DM
+- Runtime-only notify_only override: `admin notify_only <username>` redirects all admin DMs to one admin; `admin notify_only --reset` restores config value; not persistent across restarts
 
 ## Discord Gateway Events
 

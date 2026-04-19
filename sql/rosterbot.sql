@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
     phone TEXT,
     display_name TEXT,  -- global_name from Discord
     contact_status TEXT DEFAULT 'pending',
+    approval_status TEXT DEFAULT 'pending',  -- 'pending' or 'approved'; set to 'approved' by GUILD_MEMBER_UPDATE when Discord server admin approves the user
+    scammer_ack BOOLEAN NOT NULL DEFAULT 0,           -- 1 once user has acknowledged the scammer warning message
+    last_scammer_warning TIMESTAMP,
     last_contact_request TIMESTAMP,
     contact_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -64,3 +67,5 @@ CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
 -- Create index for finding users who need contact requests
 CREATE INDEX IF NOT EXISTS idx_users_contact_status ON users(contact_status);
 CREATE INDEX IF NOT EXISTS idx_users_last_contact_request ON users(last_contact_request);
+CREATE INDEX IF NOT EXISTS idx_users_approval_status ON users(approval_status);
+CREATE INDEX IF NOT EXISTS idx_users_scammer_ack ON users(scammer_ack);

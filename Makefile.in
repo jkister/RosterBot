@@ -11,6 +11,7 @@ DBDIR           = %DBDIR%
 DBFILE          = %DBFILE%
 ETCDIR          = %ETCDIR%
 MSGFILE         = %MSGFILE%
+SCAMMERMSGFILE  = %SCAMMERMSGFILE%
 LOGDIR          = %LOGDIR%
 SYSCONFDIR      = %SYSCONFDIR%
 PASSWDFILE      = %PASSWDFILE%
@@ -93,7 +94,10 @@ $(BUILDDIR)/lib/RosterBot/Discord.pm: $(SRCDIR)/lib/RosterBot/Discord.pm
 
 $(BUILDDIR)/lib/RosterBot/Contact.pm: $(SRCDIR)/lib/RosterBot/Contact.pm
 	@mkdir -p $(BUILDDIR)/lib/RosterBot
-	sed -e "s|@MSGFILE@|$(MSGFILE)|g" $< > $@
+	sed \
+		-e "s|@MSGFILE@|$(MSGFILE)|g" \
+		-e "s|@SCAMMERMSGFILE@|$(SCAMMERMSGFILE)|g" \
+		$< > $@
 	chmod 0644 $@
 
 $(BUILDDIR)/lib/RosterBot/%.pm: $(SRCDIR)/lib/RosterBot/%.pm
@@ -192,6 +196,9 @@ install: build install-dirs install-user install-files install-db \
 	echo "  $$step. Customize the contact request message (optional):"; \
 	echo "       $(MSGFILE)"; \
 	step=$$((step+1)); \
+	echo "  $$step. Customize the scammer warning message (optional):"; \
+	echo "       $(SCAMMERMSGFILE)"; \
+	step=$$((step+1)); \
 	echo "  $$step. Ensure the service is running:"; \
 	if [ "$(PROCESS_MANAGER)" = "systemd" ]; then \
 		echo "       systemctl status rosterbot"; \
@@ -286,6 +293,12 @@ install-files:
 	else \
 		echo "  $(MSGFILE) already exists, leaving unchanged."; \
 	fi
+	@if [ ! -f "$(SCAMMERMSGFILE)" ]; then \
+		install -m 0640 $(SRCDIR)/in/scammer_message.txt.in $(SCAMMERMSGFILE); \
+		echo "  Created $(SCAMMERMSGFILE) -- edit to customize the scammer warning message."; \
+	else \
+		echo "  $(SCAMMERMSGFILE) already exists, leaving unchanged."; \
+	fi
 	@if [ ! -f "$(ETCDIR)/rosterbot.conf" ]; then \
 		install -m 0640 $(BUILDDIR)/etc/rosterbot.conf $(ETCDIR)/rosterbot.conf; \
 		echo "  Created $(ETCDIR)/rosterbot.conf -- edit to set runtime options."; \
@@ -313,7 +326,21 @@ install-db:
 		$(SQLITE3) $(DBFILE) < $(SRCDIR)/sql/rosterbot.sql; \
 		echo "  Database created: $(DBFILE)"; \
 	else \
-		echo "  Database already exists, applying schema (safe -- uses IF NOT EXISTS)..."; \
+		echo "  Database already exists, running column migrations..."; \
+		if ! $(SQLITE3) $(DBFILE) "PRAGMA table_info(users);" | grep -q "^[0-9]*|approval_status|"; then \
+			echo "  Adding approval_status column (existing users set to approved)..."; \
+			$(SQLITE3) $(DBFILE) "ALTER TABLE users ADD COLUMN approval_status TEXT DEFAULT 'approved';"; \
+			$(SQLITE3) $(DBFILE) "UPDATE users SET approval_status = 'approved' WHERE approval_status IS NULL;"; \
+		fi; \
+		if ! $(SQLITE3) $(DBFILE) "PRAGMA table_info(users);" | grep -q "^[0-9]*|scammer_ack|"; then \
+			echo "  Adding scammer_ack column (existing users set to acknowledged)..."; \
+			$(SQLITE3) $(DBFILE) "ALTER TABLE users ADD COLUMN scammer_ack BOOLEAN NOT NULL DEFAULT 1;"; \
+		fi; \
+		if ! $(SQLITE3) $(DBFILE) "PRAGMA table_info(users);" | grep -q "^[0-9]*|last_scammer_warning|"; then \
+			echo "  Adding last_scammer_warning column..."; \
+			$(SQLITE3) $(DBFILE) "ALTER TABLE users ADD COLUMN last_scammer_warning TIMESTAMP;"; \
+		fi; \
+		echo "  Applying schema (safe -- uses IF NOT EXISTS)..."; \
 		$(SQLITE3) $(DBFILE) < $(SRCDIR)/sql/rosterbot.sql; \
 	fi
 	@if [ -n "$(ADMIN_ID)" ]; then \

@@ -26,6 +26,8 @@ our @EXPORT = qw(
     set_bot_user
     set_notify_only_user
     get_notify_only_user
+    set_notify_only_override
+    reset_notify_only_override
 );
 
 my $debug_enabled = 0;
@@ -33,6 +35,7 @@ my %guilds;
 my %user_cache;
 my $bot_user;
 my $NOTIFY_ONLY_USER = undef;
+my $NOTIFY_ONLY_OVERRIDE = undef;  # runtime override; cleared on restart
 
 sub set_notify_only_user {
     my ($username) = @_;
@@ -40,8 +43,19 @@ sub set_notify_only_user {
     verbose("Notifications will only be sent to: $username") if $username;
 }
 
+sub set_notify_only_override {
+    my ($username) = @_;
+    $NOTIFY_ONLY_OVERRIDE = $username;
+    verbose("Notification override set: only sending to $username");
+}
+
+sub reset_notify_only_override {
+    $NOTIFY_ONLY_OVERRIDE = undef;
+    verbose("Notification override cleared; reverting to config value: " . ($NOTIFY_ONLY_USER // "all admins"));
+}
+
 sub get_notify_only_user {
-    return $NOTIFY_ONLY_USER;
+    return defined($NOTIFY_ONLY_OVERRIDE) ? $NOTIFY_ONLY_OVERRIDE : $NOTIFY_ONLY_USER;
 }
 
 sub set_debug_flag {

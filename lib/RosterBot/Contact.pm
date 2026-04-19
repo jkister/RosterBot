@@ -10,8 +10,9 @@ use Exporter 'import';
 use RosterBot::Database;
 use RosterBot::Utils;
 
-# Path to contact request message file (substituted during install by make)
-my $CONTACT_MESSAGE_FILE = '@MSGFILE@';
+# Paths to message files (substituted during install by make)
+my $CONTACT_MESSAGE_FILE  = '@MSGFILE@';
+my $SCAMMER_MESSAGE_FILE  = '@SCAMMERMSGFILE@';
 
 # Disable automatic contact requests (for testing/maintenance)
 my $DISABLE_CONTACT_REQUESTS = 0;
@@ -23,7 +24,10 @@ our @EXPORT = qw(
     process_contact_info
     was_contacted_within_interval
     get_contact_message
+    get_scammer_warning_message
     can_send_contact_request
+    get_rate_limit_bucket_info
+    get_retry_delay_seconds
     increment_contact_request_count
     CONTACT_REQUEST_INTERVAL
     CONTACT_REQUEST_DELAY
@@ -41,7 +45,7 @@ sub set_disable_contact_requests {
 # Constants
 use constant CONTACT_REQUEST_INTERVAL    => 604800;  # 1 week
 use constant CONTACT_REQUEST_DELAY       => 30;       # seconds between sends
-use constant CONTACT_REQUEST_MAX_PER_MINUTE => 1;
+use constant CONTACT_REQUEST_MAX_PER_MINUTE => 2;
 use constant CONTACT_REQUEST_MAX_PER_10MIN  => 8;
 use constant CONTACT_REQUEST_MAX_PER_HOUR   => 30;
 
@@ -63,16 +67,20 @@ sub can_send_contact_request {
     my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
     my $per_hour   = scalar @contact_request_times;
 
+    my $buckets = "1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
+                  "  10min: $per_10min/" . CONTACT_REQUEST_MAX_PER_10MIN .
+                  "  1hr: $per_hour/" . CONTACT_REQUEST_MAX_PER_HOUR;
+
     if ($per_minute >= CONTACT_REQUEST_MAX_PER_MINUTE) {
-        RosterBot::Utils::debug("Rate limit: $per_minute DM(s) in last minute (max " . CONTACT_REQUEST_MAX_PER_MINUTE . ")");
+        RosterBot::Utils::debug("Rate limit [1min tripped] $buckets");
         return 0;
     }
     if ($per_10min >= CONTACT_REQUEST_MAX_PER_10MIN) {
-        RosterBot::Utils::debug("Rate limit: $per_10min DM(s) in last 10 min (max " . CONTACT_REQUEST_MAX_PER_10MIN . ")");
+        RosterBot::Utils::debug("Rate limit [10min tripped] $buckets");
         return 0;
     }
     if ($per_hour >= CONTACT_REQUEST_MAX_PER_HOUR) {
-        RosterBot::Utils::debug("Rate limit: $per_hour DM(s) in last hour (max " . CONTACT_REQUEST_MAX_PER_HOUR . ")");
+        RosterBot::Utils::debug("Rate limit [1hr tripped] $buckets");
         return 0;
     }
 
@@ -114,6 +122,30 @@ sub normalize_phone_to_e164 {
     return $phone;
 }
 
+sub get_retry_delay_seconds {
+    my $now = time();
+    @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
+    my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
+    my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
+    my $per_hour   = scalar @contact_request_times;
+
+    return 3602 if $per_hour   >= CONTACT_REQUEST_MAX_PER_HOUR;
+    return 602  if $per_10min  >= CONTACT_REQUEST_MAX_PER_10MIN;
+    return 62   if $per_minute >= CONTACT_REQUEST_MAX_PER_MINUTE;
+    return 0;
+}
+
+sub get_rate_limit_bucket_info {
+    my $now = time();
+    @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
+    my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
+    my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
+    my $per_hour   = scalar @contact_request_times;
+    return "1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
+           "  10min: $per_10min/" . CONTACT_REQUEST_MAX_PER_10MIN .
+           "  1hr: $per_hour/" . CONTACT_REQUEST_MAX_PER_HOUR;
+}
+
 sub increment_contact_request_count {
     my $now = time();
     push @contact_request_times, $now;
@@ -125,9 +157,9 @@ sub increment_contact_request_count {
 
 sub validate_email {
     my ($email) = @_;
-    
-    my $code = Mail::VRFY::CheckAddress(addr => $email, method => 'syntax');
-    return ($code == 0);
+
+    my $code = Mail::VRFY::CheckAddress(addr => $email, method => 'compat');
+    return ($code == 0, Mail::VRFY::English($code));
 }
 
 sub validate_phone {
@@ -159,7 +191,8 @@ sub process_contact_info {
         my $candidate = $1;
         # Clean up any trailing punctuation
         $candidate =~ s/[,;.]$//;
-        if (validate_email($candidate)) {
+        my ($email_ok) = validate_email($candidate);
+        if ($email_ok) {
             $email = $candidate;
         }
     }
@@ -222,11 +255,29 @@ Phone: +1-555-123-4567
 You can provide just an email, just a phone number, or both.
 
 If you don't want to provide contact information, reply with: STOP
-
-You can update your information anytime by messaging me:
-- `update email your.email@example.com`
-- `update phone +1-555-123-4567`
 CONTACT
+}
+
+sub get_scammer_warning_message {
+    if (open(my $fh, '<', $SCAMMER_MESSAGE_FILE)) {
+        local $/;
+        my $msg = <$fh>;
+        close $fh;
+        return $msg if defined $msg && $msg ne '';
+        RosterBot::Utils::verbose("WARNING: $SCAMMER_MESSAGE_FILE is empty, using built-in default");
+    } else {
+        RosterBot::Utils::verbose("WARNING: Cannot read $SCAMMER_MESSAGE_FILE: $! -- using built-in default");
+    }
+    return <<'WARNING';
+**SCAMMERS ARE EVERYWHERE ON DISCORD!**
+
+- Cassi (and anyone in these groups) will NEVER message you first!
+- If you want to message Cassi, check her username to be sure!
+- It should be EXACTLY "exhaustedcassi" without special characters like "_exhaustedcassi", "exhaustedcassi.", or a close spelling like "exaustedcassi"
+
+To be allowed into the group, type the phrase (exactly, without quotes):
+ "Scammers are everywhere and I have read the above"
+WARNING
 }
 
 1;

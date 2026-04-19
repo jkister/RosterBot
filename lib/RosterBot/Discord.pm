@@ -47,6 +47,7 @@ my $session_id;
 my $resume_gateway_url;
 my $heartbeat_timer;
 my $contact_request_timer;
+my $scammer_warning_timer;
 my $reconnect_attempts = 0;
 my $max_reconnect_attempts = 10;
 
@@ -55,6 +56,7 @@ sub discord_shutdown {
     $shutting_down = 1;
     Mojo::IOLoop->remove($heartbeat_timer) if $heartbeat_timer;
     Mojo::IOLoop->remove($contact_request_timer) if $contact_request_timer;
+    Mojo::IOLoop->remove($scammer_warning_timer) if $scammer_warning_timer;
     if ($ws) {
         Mojo::IOLoop->timer(5, sub { Mojo::IOLoop->stop() });
         $ws->finish(1000);
@@ -178,6 +180,60 @@ sub send_dm_to_user {
     return send_message($channel_id, $content);
 }
 
+sub handle_role_granted {
+    my ($user_id, $username, $display, $role_name, $server_name) = @_;
+
+    my $contact_info = db_get_user_contact_info($user_id);
+    my $ack_warning = ($contact_info && !$contact_info->{scammer_ack})
+        ? " ⚠️ NOTE: this user has NOT acknowledged the scammer warning yet" : "";
+
+    verbose("Member [$username] gained role [$role_name] in [$server_name]");
+    notify_admins("**ROLE GRANTED** `$display` <`$username`> was given the `$role_name` role in `$server_name`$ack_warning");
+    send_dm_to_user($user_id, "GOOD NEWS! You've been approved to join `$server_name` - come on in!");
+    if ($contact_info && $contact_info->{approval_status} ne APPROVAL_APPROVED) {
+        db_set_user_approved($user_id);
+        $contact_info = db_get_user_contact_info($user_id);
+    }
+
+    if ($contact_info &&
+        $contact_info->{scammer_ack} &&
+        $contact_info->{approval_status} eq APPROVAL_APPROVED &&
+        $contact_info->{contact_status} ne STATUS_PROVIDED &&
+        $contact_info->{contact_status} ne STATUS_STOPPED &&
+        $contact_info->{contact_status} ne STATUS_BANNED &&
+        !was_contacted_within_interval($user_id, $contact_info)) {
+
+        if (can_send_contact_request()) {
+            debug("Sending contact request to [$username] after role grant");
+            send_contact_request($user_id, $username, $display);
+        } else {
+            verbose_rate_limit_skip("contact request for $display ($username) after role grant");
+            schedule_with_retry(sub { send_contact_request($user_id, $username, $display) },
+                                "contact request for $display ($username)");
+        }
+    }
+}
+
+sub verbose_rate_limit_skip {
+    my ($description) = @_;
+    verbose("Rate limit reached; queuing $description [" . get_rate_limit_bucket_info() . "]");
+}
+
+sub schedule_with_retry {
+    my ($send_fn, $description, $extra_delay) = @_;
+    $extra_delay //= 0;
+
+    my $delay = get_retry_delay_seconds() + $extra_delay;
+    verbose("Rate limited; scheduling retry for $description in ${delay}s");
+    Mojo::IOLoop->timer($delay, sub {
+        if (can_send_contact_request()) {
+            $send_fn->();
+        } else {
+            schedule_with_retry($send_fn, $description, 0);
+        }
+    });
+}
+
 sub notify_admins {
     my ($message) = @_;
     
@@ -200,32 +256,58 @@ sub notify_admins {
 
 sub send_contact_request {
     my ($user_id, $username, $display_name) = @_;
-    
+
     # If not provided, look them up
     $display_name //= get_display_name($user_id);
     $username //= get_username($user_id);
-    
+
     my $message = get_contact_message();
-    
+
     my $result = send_dm_to_user($user_id, $message);
-    
-    if ($result) {
-        if (is_dm_blocked($result)) {
-            verbose("DM blocked for [$display_name] [$username] - not updating last_contact_request");
-            return undef;
-        }
-        
-        db_update_last_contact_request($user_id);
-        db_update_contact_status($user_id, 'contacted');
-        increment_contact_request_count();
-        verbose("Sent contact request to [$display_name] [$username]");
-        return 1;
-    } else {
-        my $error_msg = $result->{message} // 'unknown error';
-        verbose("Failed to send contact request to [$display_name] [$username]: $error_msg");
+
+    unless ($result) {
+        verbose("Failed to send contact request to [$display_name] [$username]");
         db_update_last_contact_request($user_id);
         return undef;
     }
+
+    if (is_dm_blocked($result)) {
+        verbose("DM blocked for [$display_name] [$username] - not updating last_contact_request");
+        return undef;
+    }
+
+    db_update_last_contact_request($user_id);
+    db_update_contact_status($user_id, STATUS_CONTACTED);
+    increment_contact_request_count();
+    verbose("Sent contact request to [$display_name] [$username]");
+    return 1;
+}
+
+sub send_scammer_warning {
+    my ($user_id, $username, $display_name) = @_;
+
+    # If not provided, look them up
+    $display_name //= get_display_name($user_id);
+    $username //= get_username($user_id);
+
+    my $message = get_scammer_warning_message();
+
+    my $result = send_dm_to_user($user_id, $message);
+
+    unless ($result) {
+        verbose("Failed to send scammer warning to [$display_name] [$username]");
+        return undef;
+    }
+
+    if (is_dm_blocked($result)) {
+        verbose("DM blocked for [$display_name] [$username] - not sending scammer warning");
+        return undef;
+    }
+
+    db_update_last_scammer_warning($user_id);
+    increment_contact_request_count();
+    verbose("Sent scammer warning to [$display_name] [$username]");
+    return 1;
 }
 
 sub leave_guild {
@@ -264,6 +346,41 @@ sub request_pending_contacts {
         });
         
         $delay += CONTACT_REQUEST_DELAY;
+    }
+}
+
+sub request_pending_scammer_warnings {
+    debug("Running periodic scammer warning check");
+
+    my @users = db_get_users_needing_scammer_warning(
+        86400,  # 24-hour interval between repeat warnings
+        CONTACT_REQUEST_MAX_PER_HOUR
+    );
+
+    verbose("Found " . scalar(@users) . " users needing scammer warning");
+
+    my $delay = 0;
+    my $bot_id = get_bot_user()->{id};
+    for my $user (@users) {
+        next if $user->{user_id} eq $bot_id;
+
+        my $uid     = $user->{user_id};
+        my $uname   = $user->{username};
+        my $display = extract_display_name($user, $user->{username});
+
+        verbose("Scheduling scammer warning for [$uname]");
+        Mojo::IOLoop->timer($delay, sub {
+            if (can_send_contact_request()) {
+                send_scammer_warning($uid, $uname, $display);
+            } else {
+                verbose_rate_limit_skip("scammer warning for $display ($uname)");
+                schedule_with_retry(sub { send_scammer_warning($uid, $uname, $display) },
+                                    "scammer warning for $display ($uname)");
+            }
+        });
+
+        $delay += CONTACT_REQUEST_DELAY;
+        $delay = 60 if $delay > 60;
     }
 }
 
@@ -348,7 +465,7 @@ sub sync_guild_bans {
         for my $ban (@$result) {
             my $user = $ban->{user};
             next unless $user && $user->{id};
-            db_update_contact_status($user->{id}, 'banned');
+            db_update_contact_status($user->{id}, STATUS_BANNED);
             $total++;
         }
 
@@ -436,8 +553,13 @@ sub handle_dispatch_event {
         }
 
         Mojo::IOLoop->remove($contact_request_timer) if $contact_request_timer;
-        $contact_request_timer = Mojo::IOLoop->recurring(3600, sub { 
+        $contact_request_timer = Mojo::IOLoop->recurring(3600, sub {
             request_pending_contacts();
+        });
+
+        Mojo::IOLoop->remove($scammer_warning_timer) if $scammer_warning_timer;
+        $scammer_warning_timer = Mojo::IOLoop->recurring(3600, sub {
+            request_pending_scammer_warnings();
         });
     }
     elsif ($event eq 'GUILD_CREATE') {
@@ -445,13 +567,19 @@ sub handle_dispatch_event {
         verbose("Guild available: [$guild->{name}]");
         
         db_upsert_server($guild->{id}, $guild->{name}, 'active');
-        
+
         my $guilds = get_guilds();
         $guilds->{$guild->{id}} = {
-            name => $guild->{name},
+            name    => $guild->{name},
             members => {},
+            roles   => {},
         };
-        
+        if ($data->{roles}) {
+            for my $role (@{$data->{roles}}) {
+                $guilds->{$guild->{id}}{roles}{$role->{id}} = $role->{name};
+            }
+        }
+
         request_guild_members($guild->{id});
     }
     elsif ($event eq 'GUILD_DELETE') {
@@ -475,7 +603,6 @@ sub handle_dispatch_event {
         my $user_cache = get_user_cache();
         my $bot_id = get_bot_user()->{id};
         my $delay = 0;
-        my @rate_limited_queue;
 
         for my $member (@$members) {
             my $user = $member->{user};
@@ -489,41 +616,80 @@ sub handle_dispatch_event {
             db_upsert_membership($guild_id, $user->{id}, $member->{nick}, 'member', $member->{joined_at});
 
             $guilds->{$guild_id}{members}{$user->{id}} = {
-                username => $username,
-                nick => $member->{nick},
+                username    => $username,
+                nick        => $member->{nick},
                 global_name => $user->{global_name},
-                joined => $member->{joined_at},
-                pending => $member->{pending} // 0,
+                joined      => $member->{joined_at},
+                pending     => $member->{pending} // 0,
+                roles       => { map { $_ => 1 } @{$member->{roles} // []} },
             };
 
             my $cache_name = lc($user->{username});
             $user_cache->{$cache_name} = $user->{id};
 
             my $contact_info = db_get_user_contact_info($user->{id});
-            if ($contact_info && $contact_info->{contact_status} eq 'pending' &&
-                !$contact_info->{email} && !$contact_info->{phone} &&
-                !was_contacted_within_interval($user->{id}, $contact_info)) {
+            my $uid     = $user->{id};
+            my $uname   = $username;
+            my $display = extract_display_name($member, $username);
+
+            # Catch screening approvals that happened while the bot was offline
+            if ($contact_info &&
+                !($member->{pending} // 0) &&
+                $contact_info->{approval_status} eq APPROVAL_PENDING) {
+                verbose("Detected offline approval for [$username] - marking approved");
+                db_set_user_approved($uid);
+                notify_admins("**USER APPROVED** `$display` <`$username`> was approved while bot was offline");
+                $contact_info = db_get_user_contact_info($uid);  # refresh
+            }
+
+            # Catch role grants that happened while the bot was offline
+            if ($contact_info &&
+                $contact_info->{approval_status} eq APPROVAL_PENDING &&
+                @{$member->{roles} // []}) {
+                for my $role_id (@{$member->{roles}}) {
+                    my $role_name = $guilds->{$guild_id}{roles}{$role_id} // $role_id;
+                    verbose("Detected offline role grant [$role_name] for [$username]");
+                    handle_role_granted($uid, $uname, $display, $role_name, $guilds->{$guild_id}{name});
+                }
+                $contact_info = db_get_user_contact_info($uid);  # refresh
+            }
+
+            if ($contact_info && !$contact_info->{scammer_ack} &&
+                $contact_info->{contact_status} ne STATUS_STOPPED &&
+                $contact_info->{contact_status} ne STATUS_BANNED &&
+                !$contact_info->{last_scammer_warning}) {
+
+                # Schedule non-blocking scammer warning
+                # Mark the timestamp immediately so other guild chunks don't re-queue this user
+                db_update_last_scammer_warning($uid);
+                Mojo::IOLoop->timer($delay, sub {
+                    send_scammer_warning($uid, $uname, $display);
+                });
+                $delay += CONTACT_REQUEST_DELAY;
+                $delay = 60 if $delay > 60;
+
+            } elsif ($contact_info &&
+                     $contact_info->{approval_status} eq APPROVAL_APPROVED &&
+                     $contact_info->{contact_status} ne STATUS_PROVIDED &&
+                     $contact_info->{contact_status} ne STATUS_STOPPED &&
+                     !was_contacted_within_interval($uid, $contact_info)) {
 
                 if (can_send_contact_request()) {
-                    my $uid = $user->{id};
-                    my $uname = $username;
-                    my $display = extract_display_name($member, $username);
-
-                    # Schedule non-blocking
+                    # Schedule non-blocking contact request
                     Mojo::IOLoop->timer($delay, sub {
                         send_contact_request($uid, $uname, $display);
                     });
                     $delay += CONTACT_REQUEST_DELAY;
+                    $delay = 60 if $delay > 60;
                 } else {
-                    my $display = extract_display_name($member, $username);
-                    push @rate_limited_queue, "$display ($username)";
+                    my $stagger = $delay;
+                    verbose_rate_limit_skip("contact request for $display ($username)");
+                    schedule_with_retry(sub { send_contact_request($uid, $uname, $display) },
+                                        "contact request for $display ($username)", $stagger);
+                    $delay += CONTACT_REQUEST_DELAY;
+                    $delay = 60 if $delay > 60;
                 }
             }
-        }
-
-        if (@rate_limited_queue) {
-            verbose("Rate limit reached; skipped " . scalar(@rate_limited_queue) . " user(s): " .
-                    join(', ', @rate_limited_queue));
         }
 
         verbose("Updated members for [$guilds->{$guild_id}{name}]: " .
@@ -548,63 +714,91 @@ sub handle_dispatch_event {
             if $user->{discriminator} && $user->{discriminator} ne '0';
         
         db_upsert_user($user->{id}, $username, $user->{global_name});
+        db_reset_user_on_rejoin($user->{id});
         db_upsert_membership($guild_id, $user->{id}, $member->{nick}, 'member', $member->{joined_at});
-        
+
         $guilds->{$guild_id}{members}{$user->{id}} = {
-            username => $username,
-            nick => $member->{nick},
+            username    => $username,
+            nick        => $member->{nick},
             global_name => $user->{global_name},
-            joined => $member->{joined_at},
-            pending => $member->{pending} // 0,
+            joined      => $member->{joined_at},
+            pending     => $member->{pending} // 0,
+            roles       => { map { $_ => 1 } @{$member->{roles} // []} },
         };
-        
+
         my $user_cache = get_user_cache();
         my $cache_name = lc($user->{username});
         $user_cache->{$cache_name} = $user->{id};
-        
-        verbose("Member [$username] joined [$guilds->{$guild_id}{name}]");
-        
-        # Check if we should send contact request
-        my $contact_info = db_get_user_contact_info($user->{id});
 
-        unless ($contact_info){
-            verbose( "ERROR: No contact_info for [$username] <$user->{id}>" );
+        my $server_name = $guilds->{$guild_id}{name};
+        verbose("Member [$username] joined [$server_name]");
+
+        my $contact_info_pre = db_get_user_contact_info($user->{id});
+        my $needs_scammer_warning = $contact_info_pre &&
+            !$contact_info_pre->{scammer_ack} &&
+            $contact_info_pre->{contact_status} ne STATUS_STOPPED &&
+            $contact_info_pre->{contact_status} ne STATUS_BANNED;
+
+        my $join_notice = "NOTICE: `$username` has joined `$server_name`";
+        $join_notice .= " (sending scammer warning)" if $needs_scammer_warning;
+        notify_admins($join_notice);
+
+        my $contact_info = $contact_info_pre;
+
+        unless ($contact_info) {
+            verbose("ERROR: No contact_info for [$username] <$user->{id}>");
             return;
         }
-        
+
         debug("Contact info for [$username]:");
-        debug("  Status: $contact_info->{contact_status}");
-        debug("  Email: " . ($contact_info->{email} || "none"));
-        debug("  Phone: " . ($contact_info->{phone} || "none"));
-        debug("  Last contacted: " . ($contact_info->{last_contact_request} || "never"));
-        
-        # Send contact request if:
-        # - They haven't provided contact info yet (not 'provided')
-        # - They haven't opted out (not 'stopped')
-        # - We haven't contacted them within the contact interval
-        # - We haven't hit the hourly rate limit
-        my $recently_contacted = was_contacted_within_interval($user->{id}, $contact_info);
+        debug("  Status:          $contact_info->{contact_status}");
+        debug("  Approval:        $contact_info->{approval_status}");
+        debug("  Scammer ACK:     $contact_info->{scammer_ack}");
+        debug("  Email:           " . ($contact_info->{email} || "none"));
+        debug("  Phone:           " . ($contact_info->{phone} || "none"));
+        debug("  Last contacted:  " . ($contact_info->{last_contact_request} || "never"));
 
-        if ($contact_info->{contact_status} ne 'provided' &&
-            $contact_info->{contact_status} ne 'stopped' &&
-            !$recently_contacted) {
+        my $display = extract_display_name($member, $username);
 
+        if (!$contact_info->{scammer_ack} &&
+            $contact_info->{contact_status} ne STATUS_STOPPED &&
+            $contact_info->{contact_status} ne STATUS_BANNED) {
             if (can_send_contact_request()) {
-                my $display = extract_display_name($member, $username);
-
-                debug("Sending contact request to [$username]");
-                send_contact_request($user->{id}, $username, $display);
+                debug("Sending scammer warning to [$username] (no ACK yet)");
+                send_scammer_warning($user->{id}, $username, $display);
             } else {
-                my $display = extract_display_name($member, $username);
-                verbose("Rate limit reached; skipped 1 user: $display ($username)");
+                verbose_rate_limit_skip("scammer warning for $display ($username)");
+                my ($uid, $uname) = ($user->{id}, $username);
+                schedule_with_retry(sub { send_scammer_warning($uid, $uname, $display) },
+                                    "scammer warning for $display ($username)");
             }
-        } else {
-            if ($contact_info->{contact_status} eq 'provided') {
-                debug("NOT sending: already provided contact info");
-            } elsif ($contact_info->{contact_status} eq 'stopped') {
-                debug("NOT sending: user opted out (STOP)");
-            } elsif ($recently_contacted) {
-                debug("NOT sending: already contacted within interval");
+        }
+        elsif ($contact_info->{approval_status} eq APPROVAL_APPROVED) {
+            # User has ACKed scammer warning and been approved by Discord server admin:
+            # send contact request if we haven't yet and aren't rate-limited
+            my $recently_contacted = was_contacted_within_interval($user->{id}, $contact_info);
+
+            if ($contact_info->{contact_status} ne STATUS_PROVIDED &&
+                $contact_info->{contact_status} ne STATUS_STOPPED &&
+                !$recently_contacted) {
+
+                if (can_send_contact_request()) {
+                    debug("Sending contact request to [$username]");
+                    send_contact_request($user->{id}, $username, $display);
+                } else {
+                    verbose_rate_limit_skip("contact request for $display ($username)");
+                    my ($uid, $uname) = ($user->{id}, $username);
+                    schedule_with_retry(sub { send_contact_request($uid, $uname, $display) },
+                                        "contact request for $display ($username)");
+                }
+            } else {
+                if ($contact_info->{contact_status} eq STATUS_PROVIDED) {
+                    debug("NOT sending: already provided contact info");
+                } elsif ($contact_info->{contact_status} eq STATUS_STOPPED) {
+                    debug("NOT sending: user opted out (STOP)");
+                } elsif ($recently_contacted) {
+                    debug("NOT sending: already contacted within interval");
+                }
             }
         }
     }
@@ -644,17 +838,38 @@ sub handle_dispatch_event {
         $username .= "#" . $user->{discriminator}
             if $user->{discriminator} && $user->{discriminator} ne '0';
 
-        # Check if member was just approved (pending -> false)
+        my $display = extract_display_name($member, $username);
+        my $server_name = $guilds->{$guild_id}{name};
+
+        # Check if member was just approved (pending -> false, Discord Membership Screening)
         my $was_pending = exists $guilds->{$guild_id}{members}{$user->{id}}
             ? $guilds->{$guild_id}{members}{$user->{id}}{pending}
             : undef;
         my $is_pending = $member->{pending} // 0;
 
         if (defined($was_pending) && $was_pending && !$is_pending) {
-            my $display = extract_display_name($member, $username);
-            my $server_name = $guilds->{$guild_id}{name};
-            verbose("Member [$username] approved in [$server_name]");
-            notify_admins("NOTICE: `$display` <`$username`> has been approved in `$server_name`");
+            verbose("Member [$username] approved (screening) in [$server_name]");
+            db_set_user_approved($user->{id});
+            notify_admins("**USER APPROVED** `$display` <`$username`> has been approved in `$server_name`");
+        }
+
+        # Check for role changes
+        my $old_roles = exists $guilds->{$guild_id}{members}{$user->{id}}
+            ? ($guilds->{$guild_id}{members}{$user->{id}}{roles} // {})
+            : {};
+        my %new_roles = map { $_ => 1 } @{$member->{roles} // []};
+
+        for my $role_id (keys %$old_roles) {
+            next if $new_roles{$role_id};
+            my $role_name = $guilds->{$guild_id}{roles}{$role_id} // $role_id;
+            verbose("Member [$username] lost role [$role_name] in [$server_name]");
+            notify_admins("**ROLE REVOKED** `$display` <`$username`> had the `$role_name` role removed in `$server_name`");
+        }
+
+        for my $role_id (keys %new_roles) {
+            next if $old_roles->{$role_id};
+            my $role_name = $guilds->{$guild_id}{roles}{$role_id} // $role_id;
+            handle_role_granted($user->{id}, $username, $display, $role_name, $server_name);
         }
 
         db_upsert_user($user->{id}, $username, $user->{global_name});
@@ -671,10 +886,11 @@ sub handle_dispatch_event {
             }
             $user_cache->{lc($user->{username})} = $user->{id};
 
-            $guilds->{$guild_id}{members}{$user->{id}}{username} = $username;
-            $guilds->{$guild_id}{members}{$user->{id}}{nick} = $member->{nick};
+            $guilds->{$guild_id}{members}{$user->{id}}{username}    = $username;
+            $guilds->{$guild_id}{members}{$user->{id}}{nick}        = $member->{nick};
             $guilds->{$guild_id}{members}{$user->{id}}{global_name} = $user->{global_name};
-            $guilds->{$guild_id}{members}{$user->{id}}{pending} = $is_pending;
+            $guilds->{$guild_id}{members}{$user->{id}}{pending}     = $is_pending;
+            $guilds->{$guild_id}{members}{$user->{id}}{roles}       = \%new_roles;
         }
     }
     elsif ($event eq 'GUILD_BAN_ADD') {
@@ -689,7 +905,7 @@ sub handle_dispatch_event {
             if $user->{discriminator} && $user->{discriminator} ne '0';
         my $server_name = $guilds->{$guild_id}{name};
 
-        db_update_contact_status($user->{id}, 'banned');
+        db_update_contact_status($user->{id}, STATUS_BANNED);
         verbose("Member [$username] banned from [$server_name]");
         notify_admins("NOTICE: `$username` has been banned from `$server_name`");
     }
@@ -707,7 +923,7 @@ sub handle_dispatch_event {
 
         my $contact_info = db_get_user_contact_info($user->{id});
         my $new_status = ($contact_info && ($contact_info->{email} || $contact_info->{phone}))
-            ? 'provided' : 'pending';
+            ? STATUS_PROVIDED : STATUS_PENDING;
         db_update_contact_status($user->{id}, $new_status);
         verbose("Member [$username] unbanned from [$server_name] (status -> $new_status)");
         notify_admins("NOTICE: `$username` has been unbanned from `$server_name`");

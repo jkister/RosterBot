@@ -6,6 +6,17 @@ use 5.020;
 use DBI;
 use Exporter 'import';
 
+# contact_status values
+use constant STATUS_PENDING   => 'pending';
+use constant STATUS_CONTACTED => 'contacted';
+use constant STATUS_PROVIDED  => 'provided';
+use constant STATUS_STOPPED   => 'stopped';
+use constant STATUS_BANNED    => 'banned';
+
+# approval_status values
+use constant APPROVAL_PENDING  => 'pending';
+use constant APPROVAL_APPROVED => 'approved';
+
 our @EXPORT = qw(
     db_init
     db_upsert_server
@@ -15,6 +26,7 @@ our @EXPORT = qw(
     db_update_last_contact_request
     db_get_user_contact_info
     db_get_users_needing_contact_request
+    db_get_users_needing_scammer_warning
     db_get_all_users_with_contact
     db_upsert_membership
     db_mark_member_left
@@ -30,7 +42,18 @@ our @EXPORT = qw(
     db_get_admin_user_ids
     db_delete_user_email
     db_delete_user_phone
+    db_reset_user_on_rejoin
+    db_set_scammer_ack
+    db_set_user_approved
+    db_update_last_scammer_warning
     db_disconnect
+    STATUS_PENDING
+    STATUS_CONTACTED
+    STATUS_PROVIDED
+    STATUS_STOPPED
+    STATUS_BANNED
+    APPROVAL_PENDING
+    APPROVAL_APPROVED
 );
 
 my $dbh;
@@ -69,12 +92,12 @@ sub db_upsert_server {
 
 sub db_upsert_user {
     my ($user_id, $username, $display_name) = @_;
-    
+
     $display_name //= '';
-    
+
     my $sth = $dbh->prepare(q{
-        INSERT INTO users (user_id, username, display_name, contact_status, updated_at)
-        VALUES (?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+        INSERT INTO users (user_id, username, display_name, contact_status, approval_status, scammer_ack, updated_at)
+        VALUES (?, ?, ?, 'pending', 'pending', 0, CURRENT_TIMESTAMP)
         ON CONFLICT(user_id) DO UPDATE SET
             username = excluded.username,
             display_name = excluded.display_name,
@@ -100,7 +123,7 @@ sub db_update_user_contact {
     }
     
     if (@fields) {
-        push @fields, "contact_status = 'provided'";
+        push @fields, "contact_status = '" . STATUS_PROVIDED . "'";
     }
     
     push @fields, "updated_at = CURRENT_TIMESTAMP";
@@ -113,11 +136,12 @@ sub db_update_user_contact {
 
 sub db_delete_user_email {
     my ($user_id) = @_;
-    
-    my $sth = $dbh->prepare(q{
+
+    my $pending = STATUS_PENDING;
+    my $sth = $dbh->prepare(qq{
         UPDATE users
         SET email = NULL,
-            contact_status = CASE WHEN phone IS NULL THEN 'pending' ELSE contact_status END,
+            contact_status = CASE WHEN phone IS NULL THEN '$pending' ELSE contact_status END,
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
     });
@@ -126,11 +150,12 @@ sub db_delete_user_email {
 
 sub db_delete_user_phone {
     my ($user_id) = @_;
-    
-    my $sth = $dbh->prepare(q{
+
+    my $pending = STATUS_PENDING;
+    my $sth = $dbh->prepare(qq{
         UPDATE users
         SET phone = NULL,
-            contact_status = CASE WHEN email IS NULL THEN 'pending' ELSE contact_status END,
+            contact_status = CASE WHEN email IS NULL THEN '$pending' ELSE contact_status END,
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
     });
@@ -163,30 +188,54 @@ sub db_update_last_contact_request {
 
 sub db_get_user_contact_info {
     my ($user_id) = @_;
-    
+
     my $sth = $dbh->prepare(q{
-        SELECT email, phone, contact_status, last_contact_request
+        SELECT email, phone, contact_status, last_contact_request,
+               approval_status, scammer_ack, last_scammer_warning
         FROM users
         WHERE user_id = ?
     });
     $sth->execute($user_id);
-    
+
     return $sth->fetchrow_hashref();
 }
 
 sub db_get_users_needing_contact_request {
     my ($interval, $max_count) = @_;
-    
+
     my $sth = $dbh->prepare(q{
         SELECT user_id, username, display_name
         FROM users
         WHERE contact_status IN ('pending', 'contacted')
-          AND (last_contact_request IS NULL 
+          AND approval_status = 'approved'
+          AND (last_contact_request IS NULL
                OR last_contact_request < datetime('now', '-' || ? || ' seconds'))
         LIMIT ?
     });
     $sth->execute($interval, $max_count);
-    
+
+    my @users;
+    while (my $row = $sth->fetchrow_hashref) {
+        push @users, $row;
+    }
+    return @users;
+}
+
+sub db_get_users_needing_scammer_warning {
+    my ($interval, $max_count) = @_;
+
+    my $sth = $dbh->prepare(q{
+        SELECT user_id, username, display_name
+        FROM users
+        WHERE scammer_ack = 0
+          AND contact_status != 'stopped'
+          AND contact_status != 'banned'
+          AND (last_scammer_warning IS NULL
+               OR last_scammer_warning < datetime('now', '-' || ? || ' seconds'))
+        LIMIT ?
+    });
+    $sth->execute($interval, $max_count);
+
     my @users;
     while (my $row = $sth->fetchrow_hashref) {
         push @users, $row;
@@ -389,12 +438,58 @@ sub db_get_admin_user_ids {
         SELECT user_id FROM admins
     });
     $sth->execute();
-    
+
     my @admin_ids;
     while (my ($user_id) = $sth->fetchrow_array()) {
         push @admin_ids, $user_id;
     }
     return @admin_ids;
+}
+
+sub db_reset_user_on_rejoin {
+    my ($user_id) = @_;
+
+    my $sth = $dbh->prepare(q{
+        UPDATE users
+        SET scammer_ack = 0,
+            approval_status = 'pending',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    });
+    $sth->execute($user_id);
+}
+
+sub db_set_scammer_ack {
+    my ($user_id) = @_;
+
+    my $sth = $dbh->prepare(q{
+        UPDATE users
+        SET scammer_ack = 1, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    });
+    $sth->execute($user_id);
+}
+
+sub db_update_last_scammer_warning {
+    my ($user_id) = @_;
+
+    my $sth = $dbh->prepare(q{
+        UPDATE users
+        SET last_scammer_warning = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    });
+    $sth->execute($user_id);
+}
+
+sub db_set_user_approved {
+    my ($user_id) = @_;
+
+    my $sth = $dbh->prepare(q{
+        UPDATE users
+        SET approval_status = 'approved', updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    });
+    $sth->execute($user_id);
 }
 
 1;

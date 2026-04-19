@@ -8,7 +8,7 @@ use Exporter 'import';
 use Date::Parse;
 
 use RosterBot::Database;
-use RosterBot::Utils;
+use RosterBot::Utils qw(:DEFAULT set_notify_only_override reset_notify_only_override);
 use RosterBot::Contact qw(:DEFAULT CONTACT_REQUEST_INTERVAL);
 
 our @EXPORT = qw(handle_message);
@@ -152,11 +152,12 @@ sub handle_message {
             my $target_user_id = find_user_by_name($target_username);
             
             if ($target_user_id) {
-                if (validate_email($email)) {
+                my ($email_ok, $email_reason) = validate_email($email);
+                if ($email_ok) {
                     db_update_user_contact($target_user_id, $email, undef);
                     $send_message->($msg->{channel_id}, "Updated email for $target_username to: $email");
                 } else {
-                    $send_message->($msg->{channel_id}, "Invalid email address");
+                    $send_message->($msg->{channel_id}, "Invalid email address: $email_reason");
                 }
             } else {
                 $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
@@ -301,6 +302,41 @@ sub handle_message {
                     $send_message->($msg->{channel_id}, "Admin privileges revoked from `$target_full_username`");
                 } else {
                     $send_message->($msg->{channel_id}, "`$target_full_username` is not an admin.");
+                }
+            } else {
+                $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
+            }
+        }
+    }
+    elsif ($content =~ /^admin notify_only --reset$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            reset_notify_only_override();
+            my $config_target = get_notify_only_user() // "all admins";
+            $send_message->($msg->{channel_id}, "Notification target reset to config value: $config_target");
+            verbose("Admin [$author_username] reset notify_only override");
+        }
+    }
+    elsif ($content =~ /^admin notify_only (\S+)$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            my $target_username = $1;
+            my $target_user_id = find_user_by_name($target_username);
+
+            if ($target_user_id) {
+                unless (db_is_admin($target_user_id)) {
+                    $send_message->($msg->{channel_id}, "Cannot set notify_only: '$target_username' is not an admin");
+                } else {
+                    my $target_full_username = get_username($target_user_id);
+                    set_notify_only_override($target_full_username);
+                    $send_message->($msg->{channel_id}, "Admin notifications temporarily redirected to: `$target_full_username`\nUse `admin notify_only --reset` to restore.");
+                    verbose("Admin [$author_username] set notify_only override to [$target_full_username]");
                 }
             } else {
                 $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
@@ -575,6 +611,8 @@ sub handle_message {
 - `admin grant <username>` - Grant admin privileges for the bot
 - `admin revoke <username>` - Revoke admin privileges from the bot
 - `admin list` - List all admins of the bot
+- `admin notify_only <username>` - Temporarily redirect all admin notifications to one admin (runtime only, resets on restart)
+- `admin notify_only --reset` - Restore notification target to config value
 - `user show <username>` - Show user's contact information
 - `user update <username> email <email>` - Update user's email
 - `user update <username> phone <phone>` - Update user's phone
@@ -586,8 +624,6 @@ sub handle_message {
 - `generate invite` - Generate bot invite link
 
 **User Commands (Anyone):**
-- `update email <email>` - Update your email address
-- `update phone <phone>` - Update your phone number
 - `STOP` - Stop contact information requests
 
 Examples:
@@ -596,7 +632,6 @@ Examples:
 - `message hackerx_67 Hey, how are you?`
 - `contact resend someguy`
 - `user update alice email alice@example.com`
-- `update email john@example.com`
 
 Note: Server names must be in quotes. Usernames are case-insensitive.
 HELP
@@ -606,53 +641,29 @@ HELP
     }
     
     # ========== NON-ADMIN COMMANDS ==========
-    
+
+    elsif ($content eq 'Scammers are everywhere and I have read the above') {
+        $is_command = 1;
+
+        my $contact_info = db_get_user_contact_info($author_id);
+
+        if ($contact_info && !$contact_info->{scammer_ack}) {
+            db_set_scammer_ack($author_id);
+            $send_message->($msg->{channel_id}, "Good. An admin will now review your request to join the server - it takes a day or two.");
+            verbose("User [$author_username] acknowledged scammer warning");
+
+            my $display_name = get_display_name($author_id);
+            $notify_admins->("**USER READY FOR APPROVAL** `$display_name` `$author_username` agreed about scammers");
+        } else {
+            $send_message->($msg->{channel_id}, "Already received, thank you.");
+        }
+    }
     elsif ($content =~ /(?:^|\s)\bstop\b(?:\s|$)/i) {
         $is_command = 1;
-        db_update_contact_status($author_id, 'stopped');
+        db_update_contact_status($author_id, STATUS_STOPPED);
         $send_message->($msg->{channel_id}, "Understood. I will stop asking you for contact information.");
         verbose("User [$author_username] opted out of contact requests");
     }
-    elsif ($content =~ /^update email (.+)$/i) {
-        $is_command = 1;
-        my $email = $1;
-        $email =~ s/^\s+|\s+$//g;
-        
-        if (validate_email($email)) {
-            db_update_user_contact($author_id, $email, undef);
-            $send_message->($msg->{channel_id}, "Your email address has been updated to: $email");
-            verbose("User [$author_username] updated email to [$email]");
-
-            # Notify admins
-            my $display_name = get_display_name($author_id);
-            my $notification = "**CONTACT INFO UPDATED** `$display_name` `$author_username`:\nEmail: $email";
-         
-            $notify_admins->($notification);
-        } else {
-            $send_message->($msg->{channel_id}, "That doesn't look like a valid email address. Please try again.");
-        }
-    }
-    elsif ($content =~ /^update phone (.+)$/i) {
-        $is_command = 1;
-        my $phone = $1;
-        $phone =~ s/^\s+|\s+$//g;
-        
-        if (validate_phone($phone)) {
-            my $normalized_phone = normalize_phone_to_e164($phone);
-            db_update_user_contact($author_id, undef, $normalized_phone);
-            $send_message->($msg->{channel_id}, "Your phone number has been updated to: $normalized_phone");
-            verbose("User [$author_username] updated phone to [$normalized_phone]");
-
-           # Notify admins
-            my $display_name = get_display_name($author_id);
-            my $notification = "**CONTACT INFO UPDATED** `$display_name` `$author_username`:\nPhone: $normalized_phone";
-         
-            $notify_admins->($notification);
-        } else {
-            $send_message->($msg->{channel_id}, "That doesn't look like a valid phone number. Please try again.");
-        }
-    }
-    
     # ========== CONTACT INFO DETECTION (catch-all for unstructured input) ==========
     
     elsif ($content =~ /email\s*:/i || $content =~ /phone\s*:/i || 
@@ -667,9 +678,7 @@ HELP
             my $response = "Thank you! I've recorded your contact information:\n";
             $response .= "Email: $email\n" if $email;
             $response .= "Phone: $normalized_phone\n" if $normalized_phone;
-            $response .= "\nYou can update this information anytime by messaging me:\n";
-            $response .= "- `update email your.email\@example.com`\n";
-            $response .= "- `update phone +1-555-123-4567`";
+            $response .= "\nYou can update this information anytime by messaging me your email/phone again.";
             
             $send_message->($msg->{channel_id}, $response);
             verbose("User [$author_username] provided contact info");

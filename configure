@@ -150,6 +150,7 @@ done
 DBFILE="${DBDIR}/rosterbot.db"
 PASSWDFILE="${ETCDIR}/.passwd"
 MSGFILE="${ETCDIR}/contact_message.txt"
+SCAMMERMSGFILE="${ETCDIR}/scammer_message.txt"
 
 # Daemontools log user convention: append 'l' to run user
 if [ -z "$LOGUSER" ]; then
@@ -370,6 +371,7 @@ sed \
     -e "s|%DBFILE%|${DBFILE}|g" \
     -e "s|%ETCDIR%|${ETCDIR}|g" \
     -e "s|%MSGFILE%|${MSGFILE}|g" \
+    -e "s|%SCAMMERMSGFILE%|${SCAMMERMSGFILE}|g" \
     -e "s|%LOGDIR%|${LOGDIR}|g" \
     -e "s|%SYSCONFDIR%|${SYSCONFDIR}|g" \
     -e "s|%PASSWDFILE%|${PASSWDFILE}|g" \
@@ -406,6 +408,7 @@ DBDIR="${DBDIR}"
 DBFILE="${DBFILE}"
 ETCDIR="${ETCDIR}"
 MSGFILE="${MSGFILE}"
+SCAMMERMSGFILE="${SCAMMERMSGFILE}"
 LOGDIR="${LOGDIR}"
 SYSCONFDIR="${SYSCONFDIR}"
 PASSWDFILE="${PASSWDFILE}"
@@ -436,6 +439,7 @@ Configuration summary:
   Database file:       ${DBFILE}
   Config/passwd file:  ${PASSWDFILE}
   Contact message:     ${MSGFILE}
+  Scammer message:     ${SCAMMERMSGFILE}
   Log directory:       ${LOGDIR}
   Process manager:     ${PROCESS_MANAGER}
   Run as user:         ${RUNUSER}:${RUNGROUP}
