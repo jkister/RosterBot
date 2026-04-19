@@ -649,11 +649,28 @@ HELP
 
         if ($contact_info && !$contact_info->{scammer_ack}) {
             db_set_scammer_ack($author_id);
-            $send_message->($msg->{channel_id}, "Good. An admin will now review your request to join the server - it takes a day or two.");
             verbose("User [$author_username] acknowledged scammer warning");
 
             my $display_name = get_display_name($author_id);
-            $notify_admins->("**USER READY FOR APPROVAL** `$display_name` `$author_username` agreed about scammers");
+
+            if (RosterBot::Discord::get_require_role_grant()) {
+                $send_message->($msg->{channel_id}, "Good. An admin will now review your request to join the server - it takes a day or two.");
+                $notify_admins->("**USER READY FOR APPROVAL** `$display_name` `$author_username` agreed about scammers");
+            } else {
+                db_set_user_approved($author_id);
+                $send_message->($msg->{channel_id}, "Good. I'll be in touch shortly with more information.");
+                $notify_admins->("**USER SCAMMER ACK** `$display_name` `$author_username` agreed about scammers (auto-approved)");
+
+                my $updated = db_get_user_contact_info($author_id);
+                if ($updated &&
+                    $updated->{contact_status} ne STATUS_PROVIDED &&
+                    $updated->{contact_status} ne STATUS_STOPPED &&
+                    $updated->{contact_status} ne STATUS_BANNED &&
+                    !was_contacted_within_interval($author_id, $updated)) {
+
+                    $send_contact_request->($author_id);
+                }
+            }
         } else {
             $send_message->($msg->{channel_id}, "Already received, thank you.");
         }

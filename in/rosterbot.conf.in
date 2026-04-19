@@ -17,3 +17,6 @@
 
 # Role name that triggers user approval (exact match, case-sensitive)
 #approval-role=approved
+
+# Require a role grant before sending contact request (1=yes, 0=send after scammer ACK only)
+#require-role-grant=0

@@ -14,7 +14,7 @@ use RosterBot::Utils;
 use RosterBot::Contact;
 use RosterBot::Commands;
 
-our @EXPORT = qw(start leave_guild trigger_contact_scheduler discord_shutdown);
+our @EXPORT = qw(start leave_guild trigger_contact_scheduler discord_shutdown get_require_role_grant);
 
 # Configuration
 my $DB_PATH = '@DBFILE@';
@@ -51,7 +51,10 @@ my $scammer_warning_timer;
 my $reconnect_attempts = 0;
 my $max_reconnect_attempts = 10;
 my $approval_role;
+my $require_role_grant = 0;
 my %scammer_warning_scheduled;
+
+sub get_require_role_grant { return $require_role_grant; }
 
 sub discord_shutdown {
     verbose("Shutting down cleanly...");
@@ -71,7 +74,8 @@ sub start {
     my ($opt) = @_;
     
     RosterBot::Utils::set_debug_flag($opt->{debug});
-    $approval_role = $opt->{approval_role};
+    $approval_role      = $opt->{approval_role};
+    $require_role_grant = $opt->{require_role_grant} ? 1 : 0;
     verbose("Starting Discord bot...");
     
     # Initialize database
@@ -202,27 +206,30 @@ sub handle_role_granted {
 
     verbose("Member [$username] gained role [$role_name] in [$server_name]");
     notify_admins("**ROLE GRANTED** `$display` <`$username`> was given the `$role_name` role in `$server_name`$ack_warning");
-    send_dm_to_user($user_id, "GOOD NEWS! You've been approved to join `$server_name` - come on in!");
-    if ($contact_info && $contact_info->{approval_status} ne APPROVAL_APPROVED) {
-        db_set_user_approved($user_id);
-        $contact_info = db_get_user_contact_info($user_id);
-    }
 
-    if ($contact_info &&
-        $contact_info->{scammer_ack} &&
-        $contact_info->{approval_status} eq APPROVAL_APPROVED &&
-        $contact_info->{contact_status} ne STATUS_PROVIDED &&
-        $contact_info->{contact_status} ne STATUS_STOPPED &&
-        $contact_info->{contact_status} ne STATUS_BANNED &&
-        !was_contacted_within_interval($user_id, $contact_info)) {
+    if ($require_role_grant) {
+        send_dm_to_user($user_id, "GOOD NEWS! You've been approved to join `$server_name` - come on in!");
+        if ($contact_info && $contact_info->{approval_status} ne APPROVAL_APPROVED) {
+            db_set_user_approved($user_id);
+            $contact_info = db_get_user_contact_info($user_id);
+        }
 
-        if (can_send_contact_request()) {
-            debug("Sending contact request to [$username] after role grant");
-            send_contact_request($user_id, $username, $display);
-        } else {
-            verbose_rate_limit_skip("contact request for $display ($username) after role grant");
-            schedule_with_retry(sub { send_contact_request($user_id, $username, $display) },
-                                "contact request for $display ($username)");
+        if ($contact_info &&
+            $contact_info->{scammer_ack} &&
+            $contact_info->{approval_status} eq APPROVAL_APPROVED &&
+            $contact_info->{contact_status} ne STATUS_PROVIDED &&
+            $contact_info->{contact_status} ne STATUS_STOPPED &&
+            $contact_info->{contact_status} ne STATUS_BANNED &&
+            !was_contacted_within_interval($user_id, $contact_info)) {
+
+            if (can_send_contact_request()) {
+                debug("Sending contact request to [$username] after role grant");
+                send_contact_request($user_id, $username, $display);
+            } else {
+                verbose_rate_limit_skip("contact request for $display ($username) after role grant");
+                schedule_with_retry(sub { send_contact_request($user_id, $username, $display) },
+                                    "contact request for $display ($username)");
+            }
         }
     }
 }
@@ -658,7 +665,8 @@ sub handle_dispatch_event {
             my $display = extract_display_name($member, $username);
 
             # Catch approval role grants that happened while the bot was offline
-            if ($contact_info &&
+            if ($require_role_grant &&
+                $contact_info &&
                 $contact_info->{approval_status} eq APPROVAL_PENDING &&
                 $approval_role &&
                 @{$member->{roles} // []}) {

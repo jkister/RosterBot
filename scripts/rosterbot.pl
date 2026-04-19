@@ -37,8 +37,9 @@ GetOptions(
     'debug|D'        => \$opt{debug},
     'no-contact|n'   => \$opt{no_contact},
     'notify-only=s'  => \$opt{notify_only},
-    'approval-role=s'=> \$opt{approval_role},
-    'help|h'         => \$opt{help},
+    'approval-role=s'  => \$opt{approval_role},
+    'require-role-grant' => \$opt{require_role_grant},
+    'help|h'           => \$opt{help},
 ) or die "Error parsing options\n";
 
 if ($opt{help}) {
@@ -51,6 +52,7 @@ Options:
     --notify-only=USERNAME   Send admin notifications only to USERNAME
                              (instead of all admins)
     --approval-role=ROLE     Role name that triggers user approval
+    --require-role-grant     Require role grant before sending contact request
     -h, --help               Do not print this help message
 
 Config file: $CONF_FILE
@@ -58,6 +60,7 @@ Config file: $CONF_FILE
     no-contact=1
     notify-only=username
     approval-role=approved
+    require-role-grant=1
 
 CLI flags override config file settings.
 HELP
@@ -76,6 +79,9 @@ if (!defined $opt{notify_only} && defined $conf{'notify-only'} && $conf{'notify-
 }
 if (!defined $opt{approval_role} && defined $conf{'approval-role'} && $conf{'approval-role'} ne '') {
     $opt{approval_role} = $conf{'approval-role'};
+}
+if (!defined $opt{require_role_grant} && defined $conf{'require-role-grant'}) {
+    $opt{require_role_grant} = $conf{'require-role-grant'} =~ /^(1|yes|true)$/i ? 1 : 0;
 }
 
 # enable debug here since its not set before disable_contact_requests
