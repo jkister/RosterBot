@@ -10,7 +10,7 @@ use Mojo::JSON qw(decode_json encode_json);
 use Exporter 'import';
 
 use RosterBot::Database;
-use RosterBot::Utils;
+use RosterBot::Utils qw(:DEFAULT DISCORD_MESSAGE_LIMIT);
 use RosterBot::Contact;
 use RosterBot::Commands;
 
@@ -53,6 +53,8 @@ my $max_reconnect_attempts = 10;
 my $approval_role;
 my $require_role_grant = 0;
 my %scammer_warning_scheduled;
+my @admin_message_queue;
+my $admin_queue_timer;
 
 sub get_require_role_grant { return $require_role_grant; }
 
@@ -62,6 +64,11 @@ sub discord_shutdown {
     Mojo::IOLoop->remove($heartbeat_timer) if $heartbeat_timer;
     Mojo::IOLoop->remove($contact_request_timer) if $contact_request_timer;
     Mojo::IOLoop->remove($scammer_warning_timer) if $scammer_warning_timer;
+    if ($admin_queue_timer) {
+        Mojo::IOLoop->remove($admin_queue_timer);
+        $admin_queue_timer = undef;
+        flush_admin_queue();
+    }
     if ($ws) {
         Mojo::IOLoop->timer(5, sub { Mojo::IOLoop->stop() });
         $ws->finish(1000);
@@ -260,23 +267,57 @@ sub schedule_with_retry {
     });
 }
 
-sub notify_admins {
-    my ($message) = @_;
-    
+sub flush_admin_queue {
+    return unless @admin_message_queue;
+
+    my $count = scalar @admin_message_queue;
+    my $combined = join("\n", @admin_message_queue);
+    @admin_message_queue = ();
+    $admin_queue_timer = undef;
+
     my $notify_only = RosterBot::Utils::get_notify_only_user();
-    
     if ($notify_only) {
         my $user_id = RosterBot::Utils::find_user_by_name($notify_only);
         if ($user_id) {
-            send_dm_to_user($user_id, $message);
+            debug("Flushing admin queue ($count messages, " . length($combined) . " chars) to [$notify_only]");
+            send_dm_to_user($user_id, $combined);
         } else {
             verbose("WARNING: Could not find user '$notify_only' for notification");
         }
     } else {
         my @admin_ids = db_get_admin_user_ids();
+        debug("Flushing admin queue ($count messages, " . length($combined) . " chars) to " . scalar(@admin_ids) . " admin(s)");
         for my $admin_id (@admin_ids) {
-            send_dm_to_user($admin_id, $message);
+            send_dm_to_user($admin_id, $combined);
         }
+    }
+}
+
+sub notify_admins {
+    my ($message) = @_;
+
+    # If adding this message would exceed the limit, flush first
+    my $current_len = @admin_message_queue
+        ? length(join("\n", @admin_message_queue)) + 1 + length($message)
+        : 0;
+
+    if ($current_len > DISCORD_MESSAGE_LIMIT) {
+        debug("Admin queue would exceed limit ($current_len chars); flushing before queuing new message");
+        if ($admin_queue_timer) {
+            Mojo::IOLoop->remove($admin_queue_timer);
+            $admin_queue_timer = undef;
+        }
+        flush_admin_queue();
+    }
+
+    push @admin_message_queue, $message;
+    my $queue_depth = scalar @admin_message_queue;
+    debug("Queued admin message ($queue_depth in queue, " . length($message) . " chars): $message");
+
+    unless ($admin_queue_timer) {
+        my $flush_time = scalar(localtime(time() + 60));
+        debug("Admin queue flush scheduled for $flush_time");
+        $admin_queue_timer = Mojo::IOLoop->timer(60, sub { flush_admin_queue() });
     }
 }
 

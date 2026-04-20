@@ -13,8 +13,7 @@ use RosterBot::Contact qw(:DEFAULT CONTACT_REQUEST_INTERVAL);
 
 our @EXPORT = qw(handle_message);
 
-# Discord message limit is 2000 chars; use 1800 to leave safety margin for formatting
-use constant DISCORD_MESSAGE_CHUNK_LIMIT => 1800;
+use constant DISCORD_MESSAGE_CHUNK_LIMIT => DISCORD_MESSAGE_LIMIT;
 
 sub handle_message {
     my ($msg, $send_message, $send_dm_to_user, $notify_admins, $send_contact_request) = @_;

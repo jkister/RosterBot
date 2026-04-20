@@ -8,6 +8,8 @@ binmode(STDERR, ':encoding(UTF-8)');
 
 use Exporter 'import';
 
+use constant DISCORD_MESSAGE_LIMIT => 1800;
+
 our @EXPORT = qw(
     verbose
     debug
@@ -28,6 +30,7 @@ our @EXPORT = qw(
     get_notify_only_user
     set_notify_only_override
     reset_notify_only_override
+    DISCORD_MESSAGE_LIMIT
 );
 
 my $debug_enabled = 0;

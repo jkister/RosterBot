@@ -31,6 +31,7 @@ our @EXPORT = qw(
     increment_contact_request_count
     CONTACT_REQUEST_INTERVAL
     CONTACT_REQUEST_DELAY
+    CONTACT_REQUEST_MAX_PER_15SEC
     CONTACT_REQUEST_MAX_PER_MINUTE
     CONTACT_REQUEST_MAX_PER_10MIN
     CONTACT_REQUEST_MAX_PER_HOUR
@@ -43,8 +44,9 @@ sub set_disable_contact_requests {
 }
 
 # Constants
-use constant CONTACT_REQUEST_INTERVAL    => 604800;  # 1 week
-use constant CONTACT_REQUEST_DELAY       => 30;       # seconds between sends
+use constant CONTACT_REQUEST_INTERVAL       => 604800;  # 1 week
+use constant CONTACT_REQUEST_DELAY          => 30;       # seconds between sends
+use constant CONTACT_REQUEST_MAX_PER_15SEC  => 1;
 use constant CONTACT_REQUEST_MAX_PER_MINUTE => 2;
 use constant CONTACT_REQUEST_MAX_PER_10MIN  => 8;
 use constant CONTACT_REQUEST_MAX_PER_HOUR   => 30;
@@ -63,14 +65,20 @@ sub can_send_contact_request {
     # Prune entries older than 1 hour
     @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
 
+    my $per_15sec  = scalar grep { $now - $_ < 15  } @contact_request_times;
     my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
     my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
     my $per_hour   = scalar @contact_request_times;
 
-    my $buckets = "1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
+    my $buckets = "15sec: $per_15sec/" . CONTACT_REQUEST_MAX_PER_15SEC .
+                  "  1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
                   "  10min: $per_10min/" . CONTACT_REQUEST_MAX_PER_10MIN .
                   "  1hr: $per_hour/" . CONTACT_REQUEST_MAX_PER_HOUR;
 
+    if ($per_15sec >= CONTACT_REQUEST_MAX_PER_15SEC) {
+        RosterBot::Utils::debug("Rate limit [15sec tripped] $buckets");
+        return 0;
+    }
     if ($per_minute >= CONTACT_REQUEST_MAX_PER_MINUTE) {
         RosterBot::Utils::debug("Rate limit [1min tripped] $buckets");
         return 0;
@@ -125,6 +133,7 @@ sub normalize_phone_to_e164 {
 sub get_retry_delay_seconds {
     my $now = time();
     @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
+    my $per_15sec  = scalar grep { $now - $_ < 15  } @contact_request_times;
     my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
     my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
     my $per_hour   = scalar @contact_request_times;
@@ -132,16 +141,19 @@ sub get_retry_delay_seconds {
     return 3602 if $per_hour   >= CONTACT_REQUEST_MAX_PER_HOUR;
     return 602  if $per_10min  >= CONTACT_REQUEST_MAX_PER_10MIN;
     return 62   if $per_minute >= CONTACT_REQUEST_MAX_PER_MINUTE;
+    return 17   if $per_15sec  >= CONTACT_REQUEST_MAX_PER_15SEC;
     return 0;
 }
 
 sub get_rate_limit_bucket_info {
     my $now = time();
     @contact_request_times = grep { $now - $_ < 3600 } @contact_request_times;
+    my $per_15sec  = scalar grep { $now - $_ < 15  } @contact_request_times;
     my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
     my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
     my $per_hour   = scalar @contact_request_times;
-    return "1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
+    return "15sec: $per_15sec/" . CONTACT_REQUEST_MAX_PER_15SEC .
+           "  1min: $per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
            "  10min: $per_10min/" . CONTACT_REQUEST_MAX_PER_10MIN .
            "  1hr: $per_hour/" . CONTACT_REQUEST_MAX_PER_HOUR;
 }
