@@ -35,6 +35,7 @@ if (-f $CONF_FILE) {
 my %opt;
 GetOptions(
     'debug|D'        => \$opt{debug},
+    'extradebug'     => \$opt{extradebug},
     'no-contact|n'   => \$opt{no_contact},
     'notify-only=s'  => \$opt{notify_only},
     'approval-role=s'  => \$opt{approval_role},
@@ -48,6 +49,7 @@ Usage: $0 [options]
 
 Options:
     -D, --debug              Enable debug output
+    --extradebug             Enable heartbeat/gateway event logging
     -n, --no-contact         Disable automatic contact requests
     --notify-only=USERNAME   Send admin notifications only to USERNAME
                              (instead of all admins)
@@ -86,6 +88,7 @@ if (!defined $opt{require_role_grant} && defined $conf{'require-role-grant'}) {
 
 # enable debug here since its not set before disable_contact_requests
 RosterBot::Utils::set_debug_flag($opt{debug}) if $opt{debug};
+RosterBot::Utils::set_extradebug_flag($opt{extradebug}) if $opt{extradebug};
 
 # Set contact request flag
 RosterBot::Contact::set_disable_contact_requests($opt{no_contact} || 0);

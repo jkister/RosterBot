@@ -467,7 +467,7 @@ sub send_gateway {
 }
 
 sub send_heartbeat {
-    debug("Sending heartbeat (seq: " . ($last_sequence // 'null') . ")");
+    extradebug("Sending heartbeat (seq: " . ($last_sequence // 'null') . ")");
     send_gateway(1, $last_sequence);
 }
 
@@ -556,7 +556,7 @@ sub handle_gateway_event {
     my $event = $payload->{t};
     $last_sequence = $payload->{s} if defined $payload->{s};
     
-    debug("Gateway event: OP=$op" . (defined $event ? " Event=$event" : ""));
+    extradebug("Gateway event: OP=$op" . (defined $event ? " Event=$event" : ""));
     
     if ($op == 10) {
         $heartbeat_interval = $data->{heartbeat_interval};
@@ -580,7 +580,7 @@ sub handle_gateway_event {
         }
     }
     elsif ($op == 11) {
-        debug("Received heartbeat ACK");
+        extradebug("Received heartbeat ACK");
     }
     elsif ($op == 9) {
         if ($data) {
@@ -909,6 +909,41 @@ sub handle_dispatch_event {
 
         my $display = extract_display_name($member, $username);
         my $server_name = $guilds->{$guild_id}{name};
+
+        debug("GUILD_MEMBER_UPDATE for [$username] in [$server_name]");
+
+        if (my $old = $guilds->{$guild_id}{members}{$user->{id}}) {
+            my $old_nick    = $old->{nick}        // '';
+            my $new_nick    = $member->{nick}      // '';
+            my $old_global  = $old->{global_name}  // '';
+            my $new_global  = $user->{global_name} // '';
+            my $old_uname   = $old->{username}     // '';
+
+            debug("  username:     [$old_uname] -> [$username]")     if $old_uname   ne $username;
+            debug("  nick:         [$old_nick] -> [$new_nick]")       if $old_nick    ne $new_nick;
+            debug("  global_name:  [$old_global] -> [$new_global]")   if $old_global  ne $new_global;
+            debug("  pending:      [$old->{pending}] -> [" . ($member->{pending} // 0) . "]")
+                if ($old->{pending} // 0) != ($member->{pending} // 0);
+
+            my %new_role_ids = map { $_ => 1 } @{$member->{roles} // []};
+            my @lost = grep { !$new_role_ids{$_} } keys %{$old->{roles} // {}};
+            my @gained = grep { !$old->{roles}{$_} } keys %new_role_ids;
+            for my $rid (@lost) {
+                debug("  role lost:    [" . ($guilds->{$guild_id}{roles}{$rid} // $rid) . "]");
+            }
+            for my $rid (@gained) {
+                debug("  role gained:  [" . ($guilds->{$guild_id}{roles}{$rid} // $rid) . "]");
+            }
+
+            if (!@lost && !@gained &&
+                $old_uname eq $username && $old_nick eq $new_nick &&
+                $old_global eq $new_global &&
+                ($old->{pending} // 0) == ($member->{pending} // 0)) {
+                debug("  (no tracked fields changed)");
+            }
+        } else {
+            debug("  (no prior cache entry for this member)");
+        }
 
         # Check if member was just approved (pending -> false, Discord Membership Screening)
         my $was_pending = exists $guilds->{$guild_id}{members}{$user->{id}}

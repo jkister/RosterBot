@@ -14,6 +14,8 @@ our @EXPORT = qw(
     verbose
     debug
     set_debug_flag
+    set_extradebug_flag
+    extradebug
     find_user_by_name
     is_known_member
     get_display_name
@@ -34,6 +36,7 @@ our @EXPORT = qw(
 );
 
 my $debug_enabled = 0;
+my $extradebug_enabled = 0;
 my %guilds;
 my %user_cache;
 my $bot_user;
@@ -64,6 +67,15 @@ sub get_notify_only_user {
 sub set_debug_flag {
     my ($flag) = @_;
     $debug_enabled = $flag;
+}
+
+sub set_extradebug_flag {
+    my ($flag) = @_;
+    $extradebug_enabled = $flag;
+}
+
+sub extradebug {
+    verbose(@_) if $extradebug_enabled;
 }
 
 sub verbose {
