@@ -367,8 +367,18 @@ install-daemontools:
 	@echo "Installing daemontools service..."
 	install -d -m 0755 $(PREFIX)/supervise
 	install -d -m 0755 $(PREFIX)/supervise/log
-	install -m 0755 $(BUILDDIR)/supervise/run     $(PREFIX)/supervise/run
-	install -m 0755 $(BUILDDIR)/supervise/log/run $(PREFIX)/supervise/log/run
+	@if [ ! -f "$(PREFIX)/supervise/run" ]; then \
+		install -m 0755 $(BUILDDIR)/supervise/run $(PREFIX)/supervise/run; \
+		echo "  Created $(PREFIX)/supervise/run"; \
+	else \
+		echo "  $(PREFIX)/supervise/run already exists, leaving unchanged."; \
+	fi
+	@if [ ! -f "$(PREFIX)/supervise/log/run" ]; then \
+		install -m 0755 $(BUILDDIR)/supervise/log/run $(PREFIX)/supervise/log/run; \
+		echo "  Created $(PREFIX)/supervise/log/run"; \
+	else \
+		echo "  $(PREFIX)/supervise/log/run already exists, leaving unchanged."; \
+	fi
 	chown -R $(RUNUSER):$(RUNGROUP) $(PREFIX)/supervise
 	@if [ -d "$(SERVICE_DIR)" ]; then \
 		ln -sfn $(PREFIX)/supervise $(SERVICE_DIR)/rosterbot; \

@@ -55,6 +55,7 @@ my $require_role_grant = 0;
 my %scammer_warning_scheduled;
 my @admin_message_queue;
 my $admin_queue_timer;
+my $admin_queue_flush_time;
 
 sub get_require_role_grant { return $require_role_grant; }
 
@@ -67,6 +68,7 @@ sub discord_shutdown {
     if ($admin_queue_timer) {
         Mojo::IOLoop->remove($admin_queue_timer);
         $admin_queue_timer = undef;
+        $admin_queue_flush_time = undef;
         flush_admin_queue();
     }
     if ($ws) {
@@ -274,6 +276,7 @@ sub flush_admin_queue {
     my $combined = join("\n", @admin_message_queue);
     @admin_message_queue = ();
     $admin_queue_timer = undef;
+    $admin_queue_flush_time = undef;
 
     my $notify_only = RosterBot::Utils::get_notify_only_user();
     if ($notify_only) {
@@ -312,13 +315,13 @@ sub notify_admins {
 
     push @admin_message_queue, $message;
     my $queue_depth = scalar @admin_message_queue;
-    debug("Queued admin message ($queue_depth in queue, " . length($message) . " chars): $message");
 
     unless ($admin_queue_timer) {
-        my $flush_time = scalar(localtime(time() + 60));
-        debug("Admin queue flush scheduled for $flush_time");
+        $admin_queue_flush_time = time() + 60;
         $admin_queue_timer = Mojo::IOLoop->timer(60, sub { flush_admin_queue() });
     }
+
+    debug("Queued admin message ($queue_depth in queue, " . length($message) . " chars, flush at " . scalar(localtime($admin_queue_flush_time)) . "): $message");
 }
 
 sub send_contact_request {
