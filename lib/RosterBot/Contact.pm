@@ -161,10 +161,14 @@ sub get_rate_limit_bucket_info {
 sub increment_contact_request_count {
     my $now = time();
     push @contact_request_times, $now;
+    my $per_15sec  = scalar grep { $now - $_ < 15  } @contact_request_times;
     my $per_minute = scalar grep { $now - $_ < 60  } @contact_request_times;
     my $per_10min  = scalar grep { $now - $_ < 600 } @contact_request_times;
     my $per_hour   = scalar @contact_request_times;
-    RosterBot::Utils::debug("Contact request rates: $per_minute/min  $per_10min/10min  $per_hour/hr");
+    RosterBot::Utils::debug("Contact request rates: 15sec:$per_15sec/" . CONTACT_REQUEST_MAX_PER_15SEC .
+                           "  min:$per_minute/" . CONTACT_REQUEST_MAX_PER_MINUTE .
+                           "  10min:$per_10min/" . CONTACT_REQUEST_MAX_PER_10MIN .
+                           "  hour:$per_hour/" . CONTACT_REQUEST_MAX_PER_HOUR);
 }
 
 sub validate_email {
