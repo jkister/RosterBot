@@ -53,6 +53,7 @@ my $max_reconnect_attempts = 10;
 my $approval_role;
 my $require_role_grant = 0;
 my %scammer_warning_scheduled;
+my %contact_request_scheduled;
 my @admin_message_queue;
 my $admin_queue_timer;
 my $admin_queue_flush_time;
@@ -229,8 +230,10 @@ sub handle_role_granted {
             $contact_info->{contact_status} ne STATUS_PROVIDED &&
             $contact_info->{contact_status} ne STATUS_STOPPED &&
             $contact_info->{contact_status} ne STATUS_BANNED &&
-            !was_contacted_within_interval($user_id, $contact_info)) {
+            !was_contacted_within_interval($user_id, $contact_info) &&
+            !$contact_request_scheduled{$user_id}) {
 
+            $contact_request_scheduled{$user_id} = 1;
             if (can_send_contact_request()) {
                 debug("Sending contact request to [$username] after role grant");
                 send_contact_request($user_id, $username, $display);
@@ -331,6 +334,12 @@ sub send_contact_request {
     $display_name //= get_display_name($user_id);
     $username //= get_username($user_id);
 
+    if (was_contacted_within_interval($user_id)) {
+        verbose("Skipping contact request for [$display_name] [$username]: already contacted within interval");
+        delete $contact_request_scheduled{$user_id};
+        return undef;
+    }
+
     my $message = get_contact_message();
 
     my $result = send_dm_to_user($user_id, $message);
@@ -349,6 +358,7 @@ sub send_contact_request {
     db_update_last_contact_request($user_id);
     db_update_contact_status($user_id, STATUS_CONTACTED);
     increment_contact_request_count();
+    delete $contact_request_scheduled{$user_id};
     verbose("Sent contact request to [$display_name] [$username]");
     return 1;
 }
@@ -742,8 +752,10 @@ sub handle_dispatch_event {
                      $contact_info->{approval_status} eq APPROVAL_APPROVED &&
                      $contact_info->{contact_status} ne STATUS_PROVIDED &&
                      $contact_info->{contact_status} ne STATUS_STOPPED &&
-                     !was_contacted_within_interval($uid, $contact_info)) {
+                     !was_contacted_within_interval($uid, $contact_info) &&
+                     !$contact_request_scheduled{$uid}) {
 
+                $contact_request_scheduled{$uid} = 1;
                 if (can_send_contact_request()) {
                     # Schedule non-blocking contact request
                     Mojo::IOLoop->timer($delay, sub {
@@ -849,8 +861,10 @@ sub handle_dispatch_event {
 
             if ($contact_info->{contact_status} ne STATUS_PROVIDED &&
                 $contact_info->{contact_status} ne STATUS_STOPPED &&
-                !$recently_contacted) {
+                !$recently_contacted &&
+                !$contact_request_scheduled{$user->{id}}) {
 
+                $contact_request_scheduled{$user->{id}} = 1;
                 if (can_send_contact_request()) {
                     debug("Sending contact request to [$username]");
                     send_contact_request($user->{id}, $username, $display);
