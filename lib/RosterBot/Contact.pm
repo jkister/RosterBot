@@ -295,7 +295,7 @@ sub get_scammer_warning_message {
 - If you want to message Cassi, check her username to be sure!
 - It should be EXACTLY "exhaustedcassi" without special characters like "_exhaustedcassi", "exhaustedcassi.", or a close spelling like "exaustedcassi"
 
-To be allowed into the group, type the phrase (exactly, without quotes):
+To be allowed into the group, type the phrase (without quotes):
  "Scammers are everywhere and I have read the above"
 WARNING
 }

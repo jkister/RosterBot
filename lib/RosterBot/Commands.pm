@@ -676,7 +676,7 @@ HELP
     
     # ========== NON-ADMIN COMMANDS ==========
 
-    elsif ($content eq 'Scammers are everywhere and I have read the above') {
+    elsif (_fuzzy_scammer_ack($content)) {
         $is_command = 1;
 
         my $contact_info = db_get_user_contact_info($author_id);
@@ -776,5 +776,35 @@ HELP
         $send_message->($msg->{channel_id}, "I'm just a simple bot, I'm not sure what you mean - please ask in main channel");
     }
 }
+
+sub _fuzzy_scammer_ack {
+    my ($input) = @_;
+    my $canonical = 'scammers are everywhere and i have read the above';
+    # normalize: lowercase, collapse whitespace
+    (my $normalized = lc($input)) =~ s/\s+/ /g;
+    $normalized =~ s/^\s+|\s+$//g;
+    return 1 if $normalized eq $canonical;
+    # allow up to 5 edit-distance errors (covers ~10% of phrase length)
+    return _levenshtein($normalized, $canonical) <= 5;
+}
+
+sub _levenshtein {
+    my ($s, $t) = @_;
+    my ($n, $m) = (length($s), length($t));
+    return $m unless $n;
+    return $n unless $m;
+    my @d;
+    $d[$_][0] = $_ for 0 .. $n;
+    $d[0][$_] = $_ for 0 .. $m;
+    for my $i (1 .. $n) {
+        for my $j (1 .. $m) {
+            my $cost = substr($s, $i-1, 1) eq substr($t, $j-1, 1) ? 0 : 1;
+            $d[$i][$j] = _min3($d[$i-1][$j] + 1, $d[$i][$j-1] + 1, $d[$i-1][$j-1] + $cost);
+        }
+    }
+    return $d[$n][$m];
+}
+
+sub _min3 { $_[0] < $_[1] ? ($_[0] < $_[2] ? $_[0] : $_[2]) : ($_[1] < $_[2] ? $_[1] : $_[2]) }
 
 1;
