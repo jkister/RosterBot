@@ -687,6 +687,7 @@ HELP
 
             my $display_name = get_display_name($author_id);
 
+            RosterBot::Discord::flush_join_for_user($author_id);
             if (RosterBot::Discord::get_require_role_grant()) {
                 $send_message->($msg->{channel_id}, "Good. An admin will now review your request to join the server - it takes a day or two.");
                 $notify_admins->("**USER READY FOR APPROVAL** `$display_name` `$author_username` agreed about scammers");
@@ -734,7 +735,7 @@ HELP
             $send_message->($msg->{channel_id}, $response);
             verbose("User [$author_username] provided contact info");
 
-            # Notify admins
+            RosterBot::Discord::flush_join_for_user($author_id);
             my $display_name = get_display_name($author_id);
             my $notification = "**CONTACT INFO COLLECTED** from `$display_name` `$author_username`:\n";
             $notification .= "Email: $email\n" if $email;

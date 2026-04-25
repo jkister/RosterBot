@@ -57,6 +57,8 @@ my %contact_request_scheduled;
 my @admin_message_queue;
 my $admin_queue_timer;
 my $admin_queue_flush_time;
+my %pending_join_notifications;  # user_id -> { display => ..., servers => [...] }
+my $join_digest_timer;
 
 sub get_require_role_grant { return $require_role_grant; }
 
@@ -66,6 +68,11 @@ sub discord_shutdown {
     Mojo::IOLoop->remove($heartbeat_timer) if $heartbeat_timer;
     Mojo::IOLoop->remove($contact_request_timer) if $contact_request_timer;
     Mojo::IOLoop->remove($scammer_warning_timer) if $scammer_warning_timer;
+    if ($join_digest_timer) {
+        Mojo::IOLoop->remove($join_digest_timer);
+        $join_digest_timer = undef;
+        flush_join_digest();
+    }
     if ($admin_queue_timer) {
         Mojo::IOLoop->remove($admin_queue_timer);
         $admin_queue_timer = undef;
@@ -210,6 +217,7 @@ sub send_dm_to_user {
 sub handle_role_granted {
     my ($user_id, $username, $display, $role_name, $server_name) = @_;
 
+    flush_join_for_user($user_id);
     my $contact_info = db_get_user_contact_info($user_id);
     my $ack_warning = ($contact_info && !$contact_info->{scammer_ack})
         ? " ⚠️ NOTE: this user has NOT acknowledged the scammer warning yet" : "";
@@ -270,6 +278,57 @@ sub schedule_with_retry {
             schedule_with_retry($send_fn, $description, 0, $attempts + 1);
         }
     });
+}
+
+sub queue_join_notification {
+    my ($user_id, $display, $server_name) = @_;
+
+    if (exists $pending_join_notifications{$user_id}) {
+        push @{$pending_join_notifications{$user_id}{servers}}, $server_name;
+    } else {
+        $pending_join_notifications{$user_id} = {
+            display => $display,
+            servers => [$server_name],
+        };
+    }
+
+    unless ($join_digest_timer) {
+        $join_digest_timer = Mojo::IOLoop->timer(600, sub { flush_join_digest() });
+        debug("Join digest timer started (600s)");
+    }
+}
+
+sub flush_join_for_user {
+    my ($user_id) = @_;
+    return unless exists $pending_join_notifications{$user_id};
+
+    my $entry = delete $pending_join_notifications{$user_id};
+    my $servers = join(', ', map { "`$_`" } @{$entry->{servers}});
+    notify_admins("NOTICE: `$entry->{display}` joined $servers");
+
+    unless (%pending_join_notifications) {
+        if ($join_digest_timer) {
+            Mojo::IOLoop->remove($join_digest_timer);
+            $join_digest_timer = undef;
+        }
+    }
+}
+
+sub flush_join_digest {
+    $join_digest_timer = undef;
+    return unless %pending_join_notifications;
+
+    my @entries;
+    for my $user_id (keys %pending_join_notifications) {
+        my $entry = $pending_join_notifications{$user_id};
+        my $servers = join(', ', map { "`$_`" } @{$entry->{servers}});
+        push @entries, "`$entry->{display}` joined $servers";
+    }
+    %pending_join_notifications = ();
+
+    my $count = scalar @entries;
+    my $msg = "$count user" . ($count == 1 ? '' : 's') . " joined:\n" . join("\n", @entries);
+    notify_admins($msg);
 }
 
 sub flush_admin_queue {
@@ -828,9 +887,9 @@ sub handle_dispatch_event {
             !$contact_info->{last_scammer_warning} &&
             !$scammer_warning_scheduled{$user->{id}};
 
-        my $join_notice = "NOTICE: `$username` has joined `$server_name`";
-        $join_notice .= " (sending scammer warning)" if $needs_scammer_warning;
-        notify_admins($join_notice);
+        my $join_display = extract_display_name($member, $username);
+        my $join_label = $needs_scammer_warning ? "$join_display (sending scammer warning)" : $join_display;
+        queue_join_notification($user->{id}, $join_label, $server_name);
 
         debug("Contact info for [$username]:");
         debug("  Status:          $contact_info->{contact_status}");
@@ -903,6 +962,7 @@ sub handle_dispatch_event {
      
         # Only notify admins if it's NOT the bot leaving
         if ($user->{id} ne get_bot_user()->{id}) {
+            flush_join_for_user($user->{id});
             my $notice = "NOTICE: `$display_name` <`$full_username`> has left `$server_name`";
             notify_admins($notice);
         } else {
@@ -967,6 +1027,7 @@ sub handle_dispatch_event {
 
         if (defined($was_pending) && $was_pending && !$is_pending) {
             verbose("Member [$username] approved (screening) in [$server_name]");
+            flush_join_for_user($user->{id});
             db_set_user_approved($user->{id});
             notify_admins("**USER APPROVED** `$display` <`$username`> has been approved in `$server_name`");
         }
@@ -1025,6 +1086,7 @@ sub handle_dispatch_event {
 
         db_update_contact_status($user->{id}, STATUS_BANNED);
         verbose("Member [$username] banned from [$server_name]");
+        flush_join_for_user($user->{id});
         notify_admins("NOTICE: `$username` has been banned from `$server_name`");
     }
     elsif ($event eq 'GUILD_BAN_REMOVE') {
