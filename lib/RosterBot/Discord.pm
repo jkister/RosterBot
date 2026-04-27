@@ -59,6 +59,9 @@ my $admin_queue_timer;
 my $admin_queue_flush_time;
 my %pending_join_notifications;  # user_id -> { display => ..., servers => [...] }
 my $join_digest_timer;
+my %pending_ban_notifications;   # user_id -> { username => ..., servers => [...] }
+my %pending_leave_notifications; # user_id -> { display => ..., username => ..., servers => [...] }
+my $ban_leave_digest_timer;
 
 sub get_require_role_grant { return $require_role_grant; }
 
@@ -72,6 +75,11 @@ sub discord_shutdown {
         Mojo::IOLoop->remove($join_digest_timer);
         $join_digest_timer = undef;
         flush_join_digest();
+    }
+    if ($ban_leave_digest_timer) {
+        Mojo::IOLoop->remove($ban_leave_digest_timer);
+        $ban_leave_digest_timer = undef;
+        flush_ban_leave_digest();
     }
     if ($admin_queue_timer) {
         Mojo::IOLoop->remove($admin_queue_timer);
@@ -329,6 +337,66 @@ sub flush_join_digest {
     my $count = scalar @entries;
     my $msg = "$count user" . ($count == 1 ? '' : 's') . " joined:\n" . join("\n", @entries);
     notify_admins($msg);
+}
+
+sub queue_ban_notification {
+    my ($user_id, $username, $server_name) = @_;
+
+    if (exists $pending_ban_notifications{$user_id}) {
+        push @{$pending_ban_notifications{$user_id}{servers}}, $server_name;
+    } else {
+        $pending_ban_notifications{$user_id} = {
+            username => $username,
+            servers  => [$server_name],
+        };
+    }
+
+    unless ($ban_leave_digest_timer) {
+        $ban_leave_digest_timer = Mojo::IOLoop->timer(600, sub { flush_ban_leave_digest() });
+        debug("Ban/leave digest timer started (600s)");
+    }
+}
+
+sub queue_leave_notification {
+    my ($user_id, $display_name, $full_username, $server_name) = @_;
+
+    if (exists $pending_leave_notifications{$user_id}) {
+        push @{$pending_leave_notifications{$user_id}{servers}}, $server_name;
+    } else {
+        $pending_leave_notifications{$user_id} = {
+            display  => $display_name,
+            username => $full_username,
+            servers  => [$server_name],
+        };
+    }
+
+    unless ($ban_leave_digest_timer) {
+        $ban_leave_digest_timer = Mojo::IOLoop->timer(600, sub { flush_ban_leave_digest() });
+        debug("Ban/leave digest timer started (600s)");
+    }
+}
+
+sub flush_ban_leave_digest {
+    $ban_leave_digest_timer = undef;
+    return unless %pending_ban_notifications || %pending_leave_notifications;
+
+    my @lines;
+
+    for my $user_id (keys %pending_ban_notifications) {
+        my $entry   = $pending_ban_notifications{$user_id};
+        my $servers = join(', ', map { "`$_`" } @{$entry->{servers}});
+        push @lines, "NOTICE: `$entry->{username}` has been banned from $servers";
+    }
+    %pending_ban_notifications = ();
+
+    for my $user_id (keys %pending_leave_notifications) {
+        my $entry   = $pending_leave_notifications{$user_id};
+        my $servers = join(', ', map { "`$_`" } @{$entry->{servers}});
+        push @lines, "NOTICE: `$entry->{display}` <`$entry->{username}`> has left $servers";
+    }
+    %pending_leave_notifications = ();
+
+    notify_admins(join("\n", @lines));
 }
 
 sub flush_admin_queue {
@@ -963,8 +1031,7 @@ sub handle_dispatch_event {
         # Only notify admins if it's NOT the bot leaving
         if ($user->{id} ne get_bot_user()->{id}) {
             flush_join_for_user($user->{id});
-            my $notice = "NOTICE: `$display_name` <`$full_username`> has left `$server_name`";
-            notify_admins($notice);
+            queue_leave_notification($user->{id}, $display_name, $full_username, $server_name);
         } else {
             debug("Bot left [$server_name] - not notifying admins");
         }
@@ -1087,7 +1154,7 @@ sub handle_dispatch_event {
         db_update_contact_status($user->{id}, STATUS_BANNED);
         verbose("Member [$username] banned from [$server_name]");
         flush_join_for_user($user->{id});
-        notify_admins("NOTICE: `$username` has been banned from `$server_name`");
+        queue_ban_notification($user->{id}, $username, $server_name);
     }
     elsif ($event eq 'GUILD_BAN_REMOVE') {
         my $guild_id = $data->{guild_id};
