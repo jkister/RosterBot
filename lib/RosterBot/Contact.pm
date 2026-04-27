@@ -35,6 +35,7 @@ our @EXPORT = qw(
     CONTACT_REQUEST_MAX_PER_MINUTE
     CONTACT_REQUEST_MAX_PER_10MIN
     CONTACT_REQUEST_MAX_PER_HOUR
+    SCAMMER_WARNING_INTERVAL
 );
 
 sub set_disable_contact_requests {
@@ -44,6 +45,7 @@ sub set_disable_contact_requests {
 }
 
 # Constants
+use constant SCAMMER_WARNING_INTERVAL        => 86400;   # 24 hours
 use constant CONTACT_REQUEST_INTERVAL       => 604800;  # 1 week
 use constant CONTACT_REQUEST_DELAY          => 30;       # seconds between sends
 use constant CONTACT_REQUEST_MAX_PER_15SEC  => 1;

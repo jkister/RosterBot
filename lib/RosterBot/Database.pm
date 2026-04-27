@@ -254,22 +254,33 @@ sub db_get_users_needing_scammer_warning {
 }
 
 sub db_get_all_users_with_contact {
-    my ($status_filter) = @_;
-    
+    my ($status_filter, $mode) = @_;
+    $mode //= 'contact';
+
     my $sql = q{
-        SELECT user_id, username, display_name, email, phone, contact_status, last_contact_request, contact_count
+        SELECT user_id, username, display_name, email, phone, contact_status,
+               last_contact_request, contact_count, scammer_ack, last_scammer_warning
         FROM users
     };
-    
-    if ($status_filter) {
-        $sql .= " WHERE contact_status = ?";
+
+    my $has_filter;
+    if ($mode eq 'scammer') {
+        if (defined $status_filter) {
+            $sql .= " WHERE scammer_ack = ?";
+            $has_filter = 1;
+        }
+    } else {
+        if ($status_filter) {
+            $sql .= " WHERE contact_status = ?";
+            $has_filter = 1;
+        }
     }
-    
+
     $sql .= " ORDER BY username";
-    
+
     my $sth = $dbh->prepare($sql);
-    
-    if ($status_filter) {
+
+    if ($has_filter) {
         $sth->execute($status_filter);
     } else {
         $sth->execute();

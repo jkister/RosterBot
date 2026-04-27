@@ -9,7 +9,7 @@ use Date::Parse;
 
 use RosterBot::Database;
 use RosterBot::Utils qw(:DEFAULT set_notify_only_override reset_notify_only_override);
-use RosterBot::Contact qw(:DEFAULT CONTACT_REQUEST_INTERVAL);
+use RosterBot::Contact qw(:DEFAULT CONTACT_REQUEST_INTERVAL SCAMMER_WARNING_INTERVAL);
 
 our @EXPORT = qw(handle_message);
 
@@ -391,56 +391,100 @@ sub handle_message {
             $send_message->($msg->{channel_id}, $response);
         }
     }
-    elsif ($content =~ /^list users(?:\s+(pending|contacted|provided|stopped|banned))?(?:\s+(count))?$/i) {
+    elsif ($content =~ /^list users (contact|scammer)(?:\s+(\S+))?(?:\s+(count))?$/i) {
         $is_command = 1;
-        
+
         unless ($is_admin) {
             $rejected_command = 1;
         } else {
-            my $status_filter = $1 ? lc($1) : undef;
-            my $count_only = $2 ? 1 : 0;
-            
-            my @users = db_get_all_users_with_contact($status_filter);
-            
-            # If count only, just show the number
+            my $mode          = lc($1);
+            my $status_filter = $2 ? lc($2) : undef;
+            my $count_only    = $3 ? 1 : 0;
+
+            my %valid_contact_statuses = map { $_ => 1 } qw(pending contacted provided stopped banned);
+            my %valid_scammer_statuses = (acked => 1, pending => 1);
+
+            if ($status_filter) {
+                if ($mode eq 'contact' && !$valid_contact_statuses{$status_filter}) {
+                    $send_message->($msg->{channel_id},
+                        "Invalid contact status '$status_filter'. Valid: pending, contacted, provided, stopped, banned");
+                    return;
+                }
+                if ($mode eq 'scammer' && !$valid_scammer_statuses{$status_filter}) {
+                    $send_message->($msg->{channel_id},
+                        "Invalid scammer status '$status_filter'. Valid: pending, acked");
+                    return;
+                }
+            }
+
+            # For scammer mode, map status word to scammer_ack value
+            my $db_filter;
+            if ($mode eq 'scammer' && defined $status_filter) {
+                $db_filter = ($status_filter eq 'acked') ? 1 : 0;
+            } elsif ($mode eq 'contact') {
+                $db_filter = $status_filter;
+            }
+
+            my @users = db_get_all_users_with_contact($db_filter, $mode);
+
             if ($count_only) {
-                my $status_text = $status_filter ? "with status '$status_filter'" : "total";
-                my $response = "**User count $status_text:** " . scalar(@users);
-                $send_message->($msg->{channel_id}, $response);
+                my $label = $mode eq 'scammer'
+                    ? ($status_filter ? "scammer $status_filter" : "scammer total")
+                    : ($status_filter ? "contact $status_filter" : "contact total");
+                $send_message->($msg->{channel_id}, "**User count ($label):** " . scalar(@users));
                 return;
             }
-            
-            # Otherwise show full list
-            my $status_text = $status_filter ? "with status '$status_filter'" : "All Known Users";
-            my $response = "**$status_text** (" . scalar(@users) . " total):\n\n";
+
+            my $heading = $mode eq 'scammer'
+                ? ($status_filter ? "Scammer $status_filter users" : "All users (scammer)")
+                : ($status_filter ? "Contact $status_filter users" : "All users (contact)");
+            my $response = "**$heading** (" . scalar(@users) . " total):\n\n";
             my @chunks;
-            
+
             for my $user (@users) {
                 my $display = $user->{display_name} || $user->{username};
                 $display =~ s/#.*$//;
-                
+
                 $response .= "- `$display` `$user->{username}`";
-                $response .= " [" . ($user->{email} || "no email") . "]";
-                $response .= " [" . ($user->{phone} || "no phone") . "]";
-                $response .= " [contacted " . ($user->{contact_count} || 0) . "x]";
-                
-                # For contacted status, show next eligible contact time
-                if ($status_filter && $status_filter eq 'contacted' && $user->{last_contact_request}) {
-                    my $last_contact_time = str2time($user->{last_contact_request}, 'UTC');
-                    my $next_eligible = $last_contact_time + CONTACT_REQUEST_INTERVAL;
-                    my $seconds_until = $next_eligible - time();
-                    
-                    if ($seconds_until > 0) {
-                        my $days = int($seconds_until / 86400);
-                        my $hours = int(($seconds_until % 86400) / 3600);
-                        my $mins = int(($seconds_until % 3600) / 60);
-                        my $secs = int($seconds_until % 60);
-                        $response .= " [Next: ${days}d ${hours}h ${mins}m ${secs}s]";
-                    } else {
-                        $response .= " [Next: eligible now]";
+
+                if ($mode eq 'contact') {
+                    $response .= " [" . ($user->{email} || "no email") . "]";
+                    $response .= " [" . ($user->{phone} || "no phone") . "]";
+                    $response .= " [contacted " . ($user->{contact_count} || 0) . "x]";
+
+                    if ($status_filter && $status_filter eq 'contacted' && $user->{last_contact_request}) {
+                        my $last_time    = str2time($user->{last_contact_request}, 'UTC');
+                        my $next_eligible = $last_time + CONTACT_REQUEST_INTERVAL;
+                        my $seconds_until = $next_eligible - time();
+                        if ($seconds_until > 0) {
+                            my $d = int($seconds_until / 86400);
+                            my $h = int(($seconds_until % 86400) / 3600);
+                            my $m = int(($seconds_until % 3600) / 60);
+                            my $s = int($seconds_until % 60);
+                            $response .= " [Next: ${d}d ${h}h ${m}m ${s}s]";
+                        } else {
+                            $response .= " [Next: eligible now]";
+                        }
+                    }
+                } else {
+                    my $ack_label = $user->{scammer_ack} ? "acked" : "pending";
+                    $response .= " [scammer: $ack_label]";
+
+                    if (!$user->{scammer_ack} && $user->{last_scammer_warning}) {
+                        my $last_time     = str2time($user->{last_scammer_warning}, 'UTC');
+                        my $next_eligible = $last_time + SCAMMER_WARNING_INTERVAL;
+                        my $seconds_until = $next_eligible - time();
+                        if ($seconds_until > 0) {
+                            my $d = int($seconds_until / 86400);
+                            my $h = int(($seconds_until % 86400) / 3600);
+                            my $m = int(($seconds_until % 3600) / 60);
+                            my $s = int($seconds_until % 60);
+                            $response .= " [Next: ${d}d ${h}h ${m}m ${s}s]";
+                        } else {
+                            $response .= " [Next: eligible now]";
+                        }
                     }
                 }
-
 
                 $response .= "\n";
 
@@ -449,18 +493,18 @@ sub handle_message {
                     $response = "";
                 }
             }
-            
+
             if (!@users) {
-                $response = $status_filter ? "No users found with status '$status_filter'." : "No users found.";
+                $response = "No users found.";
             }
-            
+
             push @chunks, $response if $response;
 
             my $delay = 0;
             my $cid = $msg->{channel_id};
             for my $chunk (@chunks) {
                 Mojo::IOLoop->timer($delay, sub { $send_message->($cid, $chunk) });
-                $delay = ($delay + 1) > 60 ? 60 : ($delay + 1);  # Cap at 60 seconds
+                $delay = ($delay + 1) > 60 ? 60 : ($delay + 1);
             }
         }
     }
@@ -643,7 +687,8 @@ sub handle_message {
 - `list members` - Show all members from all servers
 - `list members "<server name>"` - Show members of a specific server
 - `list servers` - Show all servers I'm in
-- `list users [status] [count]` - Show all users (optionally filter by: pending, contacted, provided, stopped, banned; add 'count' to show only totals)
+- `list users contact [status] [count]` - Show users by contact status (pending, contacted, provided, stopped, banned; 'count' for totals only)
+- `list users scammer [status] [count]` - Show users by scammer ack status (pending, acked; 'count' for totals only)
 - `message <username> <your message>` - Send a DM to a user
 - `print contact` - Show contact request message
 - `print scammer` - Show scammer warning message
@@ -662,7 +707,8 @@ sub handle_message {
 
 Examples:
 - `list members "My Cool Server"`
-- `list users pending`
+- `list users contact pending`
+- `list users scammer pending`
 - `message hackerx_67 Hey, how are you?`
 - `resend contact someguy`
 - `user update alice email alice@example.com`

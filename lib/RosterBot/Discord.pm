@@ -11,7 +11,7 @@ use Exporter 'import';
 
 use RosterBot::Database;
 use RosterBot::Utils qw(:DEFAULT DISCORD_MESSAGE_LIMIT);
-use RosterBot::Contact;
+use RosterBot::Contact qw(:DEFAULT SCAMMER_WARNING_INTERVAL);
 use RosterBot::Commands;
 
 our @EXPORT = qw(start leave_guild trigger_contact_scheduler discord_shutdown get_require_role_grant);
@@ -60,6 +60,7 @@ my $admin_queue_flush_time;
 my %pending_join_notifications;  # user_id -> { display => ..., servers => [...] }
 my $join_digest_timer;
 my %pending_ban_notifications;   # user_id -> { username => ..., servers => [...] }
+my %pending_unban_notifications; # user_id -> { username => ..., servers => [...] }
 my %pending_leave_notifications; # user_id -> { display => ..., username => ..., servers => [...] }
 my $ban_leave_digest_timer;
 
@@ -357,6 +358,24 @@ sub queue_ban_notification {
     }
 }
 
+sub queue_unban_notification {
+    my ($user_id, $username, $server_name) = @_;
+
+    if (exists $pending_unban_notifications{$user_id}) {
+        push @{$pending_unban_notifications{$user_id}{servers}}, $server_name;
+    } else {
+        $pending_unban_notifications{$user_id} = {
+            username => $username,
+            servers  => [$server_name],
+        };
+    }
+
+    unless ($ban_leave_digest_timer) {
+        $ban_leave_digest_timer = Mojo::IOLoop->timer(600, sub { flush_ban_leave_digest() });
+        debug("Ban/leave digest timer started (600s)");
+    }
+}
+
 sub queue_leave_notification {
     my ($user_id, $display_name, $full_username, $server_name) = @_;
 
@@ -378,7 +397,7 @@ sub queue_leave_notification {
 
 sub flush_ban_leave_digest {
     $ban_leave_digest_timer = undef;
-    return unless %pending_ban_notifications || %pending_leave_notifications;
+    return unless %pending_ban_notifications || %pending_unban_notifications || %pending_leave_notifications;
 
     my @lines;
 
@@ -388,6 +407,13 @@ sub flush_ban_leave_digest {
         push @lines, "NOTICE: `$entry->{username}` has been banned from $servers";
     }
     %pending_ban_notifications = ();
+
+    for my $user_id (keys %pending_unban_notifications) {
+        my $entry   = $pending_unban_notifications{$user_id};
+        my $servers = join(', ', map { "`$_`" } @{$entry->{servers}});
+        push @lines, "NOTICE: `$entry->{username}` has been unbanned from $servers";
+    }
+    %pending_unban_notifications = ();
 
     for my $user_id (keys %pending_leave_notifications) {
         my $entry   = $pending_leave_notifications{$user_id};
@@ -561,7 +587,7 @@ sub request_pending_scammer_warnings {
     debug("Running periodic scammer warning check");
 
     my @users = db_get_users_needing_scammer_warning(
-        86400,  # 24-hour interval between repeat warnings
+        SCAMMER_WARNING_INTERVAL,
         CONTACT_REQUEST_MAX_PER_HOUR
     );
 
@@ -1173,7 +1199,7 @@ sub handle_dispatch_event {
             ? STATUS_PROVIDED : STATUS_PENDING;
         db_update_contact_status($user->{id}, $new_status);
         verbose("Member [$username] unbanned from [$server_name] (status -> $new_status)");
-        notify_admins("NOTICE: `$username` has been unbanned from `$server_name`");
+        queue_unban_notification($user->{id}, $username, $server_name);
     }
     elsif ($event eq 'MESSAGE_CREATE') {
         RosterBot::Commands::handle_message($data, \&send_message, \&send_dm_to_user, \&notify_admins, \&send_contact_request);
