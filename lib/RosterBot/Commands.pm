@@ -737,11 +737,10 @@ HELP
 
             RosterBot::Discord::flush_join_for_user($author_id);
             my $display_name = get_display_name($author_id);
-            my $notification = "**CONTACT INFO COLLECTED** from `$display_name` `$author_username`:\n";
-            $notification .= "Email: $email\n" if $email;
-            $notification .= "Phone: $normalized_phone" if $normalized_phone;
-         
-            $notify_admins->($notification);
+            my $notification = "CONTACT INFO COLLECTED from $display_name $author_username:";
+            $notification .= " Email: $email" if $email;
+            $notification .= " Phone: $normalized_phone" if $normalized_phone;
+            verbose($notification);
         } else {
             $send_message->($msg->{channel_id}, 
                 "I couldn't validate the contact information you provided. Please check the format and try again.\n\n" .
