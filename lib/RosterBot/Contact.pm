@@ -293,12 +293,11 @@ sub get_scammer_warning_message {
     return <<'WARNING';
 **SCAMMERS ARE EVERYWHERE ON DISCORD!**
 
-- Cassi (and anyone in these groups) will NEVER message you first!
-- If you want to message Cassi, check her username to be sure!
-- It should be EXACTLY "exhaustedcassi" without special characters like "_exhaustedcassi", "exhaustedcassi.", or a close spelling like "exaustedcassi"
+- No one in these groups will EVER message you first!
+- Anyone messaging you first is probably trying to steal your money
 
-To be allowed into the group, type the phrase (without quotes):
- "Scammers are everywhere and I have read the above"
+To be allowed into the group, message me the following:
+ `Scammers are everywhere and I have read the above`
 WARNING
 }
 
