@@ -1036,15 +1036,18 @@ sub handle_dispatch_event {
 
         if ($needs_scammer_warning) {
             $scammer_warning_scheduled{$user->{id}} = 1;
-            if (can_send_contact_request()) {
-                debug("Sending scammer warning to [$username] (no ACK yet)");
-                send_scammer_warning($user->{id}, $username, $display);
-            } else {
-                verbose_rate_limit_skip("scammer warning for $display ($username)");
-                my ($uid, $uname) = ($user->{id}, $username);
-                schedule_with_retry(sub { send_scammer_warning($uid, $uname, $display) },
-                                    "scammer warning for $display ($username)");
-            }
+            my ($uid, $uname) = ($user->{id}, $username);
+            debug("Scheduling scammer warning to [$username] in 5s");
+            Mojo::IOLoop->timer(5, sub {
+                if (can_send_contact_request()) {
+                    debug("Sending scammer warning to [$uname] (no ACK yet)");
+                    send_scammer_warning($uid, $uname, $display);
+                } else {
+                    verbose_rate_limit_skip("scammer warning for $display ($uname)");
+                    schedule_with_retry(sub { send_scammer_warning($uid, $uname, $display) },
+                                        "scammer warning for $display ($uname)");
+                }
+            });
         }
         elsif ($contact_info->{approval_status} eq APPROVAL_APPROVED) {
             # User has ACKed scammer warning and been approved by Discord server admin:

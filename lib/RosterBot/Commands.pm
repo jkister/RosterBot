@@ -283,10 +283,28 @@ sub handle_message {
             }
         }
     }
+    elsif ($content =~ /^user stop (\S+)$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            my $target_username = $1;
+            my $target_user_id = find_user_by_name($target_username);
+
+            if ($target_user_id) {
+                db_update_contact_status($target_user_id, STATUS_STOPPED);
+                db_set_scammer_ack($target_user_id);
+                $send_message->($msg->{channel_id}, "Stopped all contact and scammer warning messages for `$target_username`");
+            } else {
+                $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
+            }
+        }
+    }
     elsif ($content =~ /^user\s+/i) {
         $is_command = 1;
         $syntax_error = 1;
-    
+
         if ($is_admin) {
             $send_message->($msg->{channel_id}, "Syntax error in 'user' command. Type `help` for command list.");
         }
@@ -699,6 +717,7 @@ sub handle_message {
 - `user delete <username> email` - Delete user's email
 - `user delete <username> phone` - Delete user's phone
 - `user show <username>` - Show user's contact information
+- `user stop <username>` - Stop all contact and scammer warning messages for a user
 - `user update <username> email <email>` - Update user's email
 - `user update <username> phone <phone>` - Update user's phone
 
