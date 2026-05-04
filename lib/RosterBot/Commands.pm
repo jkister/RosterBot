@@ -724,14 +724,6 @@ sub handle_message {
 **User Commands (Anyone):**
 - `STOP` - Stop contact information requests
 
-Examples:
-- `list members "My Cool Server"`
-- `list users contact pending`
-- `list users scammer pending`
-- `message hackerx_67 Hey, how are you?`
-- `resend contact someguy`
-- `user update alice email alice@example.com`
-
 Note: Server names must be in quotes. Usernames are case-insensitive.
 HELP
             
