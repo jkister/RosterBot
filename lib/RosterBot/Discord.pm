@@ -59,6 +59,8 @@ my $admin_queue_timer;
 my $admin_queue_flush_time;
 my %pending_join_notifications;  # user_id -> { display => ..., servers => [...] }
 my $join_digest_timer;
+my %pending_role_notifications;  # "$role\0$server" -> { role => ..., server => ..., users => [{ display, username, no_ack }] }
+my $role_digest_timer;
 my %pending_ban_notifications;   # user_id -> { username => ..., servers => [...] }
 my %pending_unban_notifications; # user_id -> { username => ..., servers => [...] }
 my %pending_leave_notifications; # user_id -> { display => ..., username => ..., servers => [...] }
@@ -76,6 +78,11 @@ sub discord_shutdown {
         Mojo::IOLoop->remove($join_digest_timer);
         $join_digest_timer = undef;
         flush_join_digest();
+    }
+    if ($role_digest_timer) {
+        Mojo::IOLoop->remove($role_digest_timer);
+        $role_digest_timer = undef;
+        flush_role_digest();
     }
     if ($ban_leave_digest_timer) {
         Mojo::IOLoop->remove($ban_leave_digest_timer);
@@ -228,11 +235,10 @@ sub handle_role_granted {
 
     flush_join_for_user($user_id);
     my $contact_info = db_get_user_contact_info($user_id);
-    my $ack_warning = ($contact_info && !$contact_info->{scammer_ack})
-        ? " ⚠️ NOTE: this user has NOT acknowledged the scammer warning yet" : "";
+    my $no_ack = ($contact_info && !$contact_info->{scammer_ack}) ? 1 : 0;
 
     verbose("Member [$username] gained role [$role_name] in [$server_name]");
-    notify_admins("**ROLE GRANTED** `$display` <`$username`> was given the `$role_name` role in `$server_name`$ack_warning");
+    queue_role_notification($display, $username, $role_name, $server_name, $no_ack);
 
     if ($require_role_grant) {
         send_dm_to_user($user_id, "GOOD NEWS! You've been approved to join `$server_name` - come on in!");
@@ -338,6 +344,39 @@ sub flush_join_digest {
     my $count = scalar @entries;
     my $msg = "$count user" . ($count == 1 ? '' : 's') . " joined:\n" . join("\n", @entries);
     notify_admins($msg);
+}
+
+sub queue_role_notification {
+    my ($display, $username, $role_name, $server_name, $no_ack) = @_;
+
+    my $key = "$role_name\0$server_name";
+    $pending_role_notifications{$key} //= { role => $role_name, server => $server_name, users => [] };
+    push @{$pending_role_notifications{$key}{users}}, { display => $display, username => $username, no_ack => $no_ack };
+
+    unless ($role_digest_timer) {
+        $role_digest_timer = Mojo::IOLoop->timer(600, sub { flush_role_digest() });
+        debug("Role digest timer started (600s)");
+    }
+}
+
+sub flush_role_digest {
+    $role_digest_timer = undef;
+    return unless %pending_role_notifications;
+
+    my @msgs;
+    for my $key (sort keys %pending_role_notifications) {
+        my $entry   = $pending_role_notifications{$key};
+        my $any_no_ack = grep { $_->{no_ack} } @{$entry->{users}};
+        my @user_lines = map { "`$_->{display}` <`$_->{username}`>" . ($_->{no_ack} ? " ⚠️" : "") }
+                             @{$entry->{users}};
+        my $count  = scalar @user_lines;
+        my $header = "**ROLE GRANTED** `$entry->{role}` in `$entry->{server}` ($count user" . ($count == 1 ? '' : 's') . "):";
+        my $legend = $any_no_ack ? "\n⚠️ = user has NOT acknowledged the scammer warning" : "";
+        push @msgs, $header . "\n" . join("\n", @user_lines) . $legend;
+    }
+    %pending_role_notifications = ();
+
+    notify_admins(join("\n\n", @msgs));
 }
 
 sub queue_ban_notification {
