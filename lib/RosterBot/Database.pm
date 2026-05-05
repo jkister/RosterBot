@@ -472,8 +472,7 @@ sub db_reset_user_on_rejoin {
 
     my $sth = $dbh->prepare(q{
         UPDATE users
-        SET scammer_ack = 0,
-            approval_status = 'pending',
+        SET approval_status = 'pending',
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
     });
