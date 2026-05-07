@@ -367,11 +367,11 @@ sub flush_role_digest {
     for my $key (sort keys %pending_role_notifications) {
         my $entry   = $pending_role_notifications{$key};
         my $any_no_ack = grep { $_->{no_ack} } @{$entry->{users}};
-        my @user_lines = map { "`$_->{display}` <`$_->{username}`>" . ($_->{no_ack} ? " ⚠️" : "") }
+        my @user_lines = map { ($_->{no_ack} ? "⚠ " : "✅ ") . "`$_->{display}` <`$_->{username}`>" }
                              @{$entry->{users}};
         my $count  = scalar @user_lines;
         my $header = "**ROLE GRANTED** `$entry->{role}` in `$entry->{server}` ($count user" . ($count == 1 ? '' : 's') . "):";
-        my $legend = $any_no_ack ? "\n⚠️ = user has NOT acknowledged the scammer warning" : "";
+        my $legend = $any_no_ack ? "\n⚠ = user has NOT acknowledged the scammer warning" : "";
         push @msgs, $header . "\n" . join("\n", @user_lines) . $legend;
     }
     %pending_role_notifications = ();
