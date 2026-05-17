@@ -146,6 +146,13 @@ sub discord_api {
         if (($tx->res->code // 0) == 401) {
             die "Discord token rejected (401 Unauthorized) - restart with a valid token\n";
         }
+        if (($tx->res->code // 0) == 429) {
+            my $body = eval { decode_json($tx->res->body) } // {};
+            my $retry_after = $body->{retry_after} // 1;
+            verbose("Discord rate limited (429); sleeping ${retry_after}s before retrying");
+            sleep($retry_after);
+            return discord_api($method, $endpoint, $data);
+        }
         verbose("API Error: $err->{message}");
         debug("Response: " . $tx->res->body) if $tx->res->body;
         return undef;
@@ -156,8 +163,16 @@ sub discord_api {
     if (!$body && $method eq 'DELETE') {
         return { success => 1, code => $tx->res->code };
     }
-    
+
     my $result = decode_json($body || '{}');
+
+    if (ref($result) eq 'HASH' && $result->{code} && $result->{code} == 429) {
+        my $retry_after = $result->{retry_after} // 1;
+        verbose("Discord rate limited (429 in body); sleeping ${retry_after}s before retrying");
+        sleep($retry_after);
+        return discord_api($method, $endpoint, $data);
+    }
+
     return $result;
 }
 
@@ -242,6 +257,7 @@ sub handle_role_granted {
 
     if ($require_role_grant) {
         send_dm_to_user($user_id, "GOOD NEWS! You've been approved to join `$server_name` - come on in!");
+        increment_contact_request_count();
         if ($contact_info && $contact_info->{approval_status} ne APPROVAL_APPROVED) {
             db_set_user_approved($user_id);
             $contact_info = db_get_user_contact_info($user_id);
@@ -479,6 +495,7 @@ sub flush_admin_queue {
         if ($user_id) {
             debug("Flushing admin queue ($count messages, " . length($combined) . " chars) to [$notify_only]");
             send_dm_to_user($user_id, $combined);
+            increment_contact_request_count();
         } else {
             verbose("WARNING: Could not find user '$notify_only' for notification");
         }
@@ -487,6 +504,7 @@ sub flush_admin_queue {
         debug("Flushing admin queue ($count messages, " . length($combined) . " chars) to " . scalar(@admin_ids) . " admin(s)");
         for my $admin_id (@admin_ids) {
             send_dm_to_user($admin_id, $combined);
+            increment_contact_request_count();
         }
     }
 }
