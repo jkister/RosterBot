@@ -731,8 +731,8 @@ sub send_resume {
 }
 
 sub request_guild_members {
-    my ($guild_id) = @_;
-    debug("Requesting guild members for [$guild_id]");
+    my ($guild_id, $guild_name) = @_;
+    debug("Requesting guild members for [" . ($guild_name // $guild_id) . "]");
     send_gateway(8, {
         guild_id => $guild_id,
         query => '',
@@ -883,7 +883,7 @@ sub handle_dispatch_event {
             }
         }
 
-        request_guild_members($guild->{id});
+        request_guild_members($guild->{id}, $guild->{name});
     }
     elsif ($event eq 'GUILD_DELETE') {
         my $guild_id = $data->{id};

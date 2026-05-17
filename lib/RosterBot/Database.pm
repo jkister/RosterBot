@@ -166,10 +166,10 @@ sub db_update_contact_status {
     my ($user_id, $status) = @_;
 
     my $sth = $dbh->prepare(q{
-        SELECT contact_status FROM users WHERE user_id = ?
+        SELECT contact_status, username FROM users WHERE user_id = ?
     });
     $sth->execute($user_id);
-    my ($old_status) = $sth->fetchrow_array();
+    my ($old_status, $username) = $sth->fetchrow_array();
 
     $sth = $dbh->prepare(q{
         UPDATE users
@@ -180,7 +180,8 @@ sub db_update_contact_status {
     $sth->execute($status, $user_id);
 
     if (defined $old_status && $old_status ne $status) {
-        warn "[" . scalar(localtime) . "] Contact status [$user_id]: $old_status -> $status\n";
+        my $label = $username // $user_id;
+        warn "[" . scalar(localtime) . "] Contact status [$label]: $old_status -> $status\n";
     }
 }
 
