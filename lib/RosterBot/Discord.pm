@@ -526,6 +526,11 @@ sub send_contact_request {
     $display_name //= get_display_name($user_id);
     $username //= get_username($user_id);
 
+    unless (can_send_contact_request()) {
+        verbose_rate_limit_skip("contact request for $display_name ($username)");
+        return undef;
+    }
+
     if (was_contacted_within_interval($user_id)) {
         verbose("Skipping contact request for [$display_name] [$username]: already contacted within interval");
         delete $contact_request_scheduled{$user_id};
@@ -615,7 +620,13 @@ sub request_pending_contacts {
         
         # Schedule non-blocking
         Mojo::IOLoop->timer($delay, sub {
-            send_contact_request($uid, $uname, $display);
+            if (can_send_contact_request()) {
+                send_contact_request($uid, $uname, $display);
+            } else {
+                verbose_rate_limit_skip("contact request for $display ($uname)");
+                schedule_with_retry(sub { send_contact_request($uid, $uname, $display) },
+                                    "contact request for $display ($uname)");
+            }
         });
         
         $delay += CONTACT_REQUEST_DELAY;
@@ -944,6 +955,7 @@ sub handle_dispatch_event {
                      $contact_info->{approval_status} eq APPROVAL_APPROVED &&
                      $contact_info->{contact_status} ne STATUS_PROVIDED &&
                      $contact_info->{contact_status} ne STATUS_STOPPED &&
+                     $contact_info->{contact_status} ne STATUS_BANNED &&
                      !was_contacted_within_interval($uid, $contact_info) &&
                      !$contact_request_scheduled{$uid}) {
 
@@ -1056,6 +1068,7 @@ sub handle_dispatch_event {
 
             if ($contact_info->{contact_status} ne STATUS_PROVIDED &&
                 $contact_info->{contact_status} ne STATUS_STOPPED &&
+                $contact_info->{contact_status} ne STATUS_BANNED &&
                 !$recently_contacted &&
                 !$contact_request_scheduled{$user->{id}}) {
 

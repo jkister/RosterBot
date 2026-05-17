@@ -221,6 +221,31 @@ sub handle_message {
             }
         }
     }
+    elsif ($content =~ /^user update (\S+) status (\S+)$/i) {
+        $is_command = 1;
+
+        unless ($is_admin) {
+            $rejected_command = 1;
+        } else {
+            my $target_username = $1;
+            my $new_status      = lc($2);
+
+            my %valid = map { $_ => 1 } qw(pending contacted provided stopped banned);
+            if (!$valid{$new_status}) {
+                $send_message->($msg->{channel_id},
+                    "Invalid status '$new_status'. Valid: pending, contacted, provided, stopped, banned");
+            } else {
+                my $target_user_id = find_user_by_name($target_username);
+                if ($target_user_id) {
+                    db_update_contact_status($target_user_id, $new_status);
+                    $send_message->($msg->{channel_id}, "Updated status for `$target_username` to: $new_status");
+                    verbose("Admin [$author_username] set contact status for [$target_username] to [$new_status]");
+                } else {
+                    $send_message->($msg->{channel_id}, "Could not find user '$target_username'");
+                }
+            }
+        }
+    }
     elsif ($content =~ /^user delete (\S+) email$/i) {
         $is_command = 1;
         
@@ -720,6 +745,7 @@ sub handle_message {
 - `user stop <username>` - Stop all contact and scammer warning messages for a user
 - `user update <username> email <email>` - Update user's email
 - `user update <username> phone <phone>` - Update user's phone
+- `user update <username> status <status>` - Update user's contact status (pending, contacted, provided, stopped, banned)
 
 **User Commands (Anyone):**
 - `STOP` - Stop contact information requests
